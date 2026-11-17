@@ -1,0 +1,20 @@
+services:
+  caddy-manager:
+    image: ghcr.io/mardix/caddy.manager:latest   # built by GitHub Actions
+    build: .                                     # or build locally: docker compose up -d --build
+    container_name: caddy-manager
+    restart: unless-stopped
+    environment:
+      # The single admin password. Set it in .env (see .env.example).
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"     # HTTP/3
+      - "8081:8080"       # admin UI — use "127.0.0.1:8080:8080" to keep it off the network
+    volumes:
+      - ./data:/data      # hosts, settings, Caddyfile, certificates, logs, backups
+      - ./config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # reach services running on the Docker host

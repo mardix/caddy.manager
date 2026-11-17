@@ -1,0 +1,5 @@
+data
+config
+bin
+.env
+*_test.go
