@@ -282,6 +282,7 @@ func convertSite(n *cnode, snippets map[string]*cnode) (Host, []string, string) 
 	}
 
 	mains := 0
+	hostNoop := false
 	var raw []string
 	setMainProxy := func(k *cnode, ups []string) string {
 		if len(ups) == 0 {
@@ -306,6 +307,25 @@ func convertSite(n *cnode, snippets map[string]*cnode) (Host, []string, string) 
 				}
 				h.HealthPath = a[0]
 			case "health_interval":
+			case "header_up", "header_down":
+				if len(a) != 2 || !reHdrName.MatchString(a[0]) || !noBad(a[1]) || strings.Contains(a[1], "{upstream") {
+					return fmt.Sprintf("reverse_proxy uses a %s rule this app doesn't manage", sk.name())
+				}
+				if sk.name() == "header_up" && strings.EqualFold(a[0], "Host") && (a[1] == "{http.request.host}" || a[1] == "{host}") {
+					// Caddy forwards the Host header as received; that only differs (by the port) on non-standard ports
+					for _, d := range h.Domains {
+						if strings.Contains(d, ":") {
+							return "it rewrites the Host header on a site with a custom port"
+						}
+					}
+					hostNoop = true
+					continue
+				}
+				kind := "req"
+				if sk.name() == "header_down" {
+					kind = "res"
+				}
+				h.Headers = append(h.Headers, Header{Kind: kind, Name: a[0], Value: a[1]})
 			default:
 				return fmt.Sprintf("reverse_proxy uses %q", sk.name())
 			}
@@ -482,6 +502,9 @@ func convertSite(n *cnode, snippets map[string]*cnode) (Host, []string, string) 
 	}
 	if h.Type == "proxy" && len(h.Upstreams) == 0 {
 		return h, nil, "it has paths but no main upstream"
+	}
+	if hostNoop {
+		notes = append(notes, "header_up Host {http.request.host} dropped: Caddy already sends the original Host header")
 	}
 	h.Raw = strings.TrimSpace(strings.Join(raw, ""))
 	return h, notes, ""

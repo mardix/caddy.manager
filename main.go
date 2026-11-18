@@ -273,6 +273,7 @@ func (a *App) routes(mux *http.ServeMux) {
 	api("POST /api/settings/test", a.testAI)
 	api("POST /api/ai", a.ai)
 	api("POST /api/certs/{id}", a.uploadCert)
+	api("POST /api/certs/retry", a.retryCert)
 	api("POST /api/caddy/restart", func(w http.ResponseWriter, r *http.Request) {
 		if err := a.caddy.Restart(); err != nil {
 			jerr(w, 500, err.Error())
@@ -821,6 +822,7 @@ type hostStatus struct {
 	Error      string `json:"error,omitempty"`
 	Cert       string `json:"cert"` // valid | expiring | failed | pending | http | none
 	CertDays   int    `json:"certDays"`
+	CertUntil  int64  `json:"certUntil,omitempty"`
 	CertIssuer string `json:"certIssuer,omitempty"`
 	CertError  string `json:"certError,omitempty"`
 }
@@ -874,6 +876,7 @@ func (a *App) hostStatuses(st State) map[string]hostStatus {
 				left := time.Until(time.Unix(best, 0))
 				life := time.Duration(best-bestFrom) * time.Second
 				hs.CertDays = int(left.Hours() / 24)
+				hs.CertUntil = best
 				hs.Cert = "valid"
 				// Caddy renews with about a third of the lifetime left; under a fifth means renewal is overdue
 				if left < life/5 || left <= 0 {
@@ -911,6 +914,31 @@ func (a *App) hostStatuses(st State) map[string]hostStatus {
 	return out
 }
 
+// retryCert reloads the running config with --force, which makes Caddy drop its back-off and
+// request missing or failed certificates again right away.
+func (a *App) retryCert(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		HostID string `json:"hostId"`
+	}
+	readJSON(r, &req)
+	st, _ := a.snapshot()
+	name := "all hosts"
+	for _, h := range st.Hosts {
+		if h.ID == req.HostID {
+			name = strings.Join(h.Domains, ", ")
+		}
+	}
+	a.applyMu.Lock()
+	err := a.caddy.Reload()
+	a.applyMu.Unlock()
+	if err != nil {
+		jerr(w, 500, "Caddy couldn't reload: "+err.Error())
+		return
+	}
+	a.caddy.note("info", "Retrying certificate for "+name)
+	jok(w, map[string]bool{"ok": true})
+}
+
 func (a *App) checkNow(w http.ResponseWriter, r *http.Request) {
 	st, _ := a.snapshot()
 	a.mon.CheckAll(st)
@@ -926,11 +954,12 @@ func (a *App) getStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	certs := scanCerts(a.dataDir)
 	jok(w, map[string]any{
-		"caddy":  map[string]any{"running": running, "error": exitErr, "since": since.Unix()},
-		"hosts":  a.hostStatuses(st),
-		"events": events,
-		"certs":  len(certs),
-		"manual": st.Manual,
+		"caddy":    map[string]any{"running": running, "error": exitErr, "since": since.Unix()},
+		"hosts":    a.hostStatuses(st),
+		"events":   events,
+		"certs":    len(certs),
+		"certList": certs,
+		"manual":   st.Manual,
 	})
 }
 

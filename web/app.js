@@ -102,6 +102,7 @@ function rerender() {
   else if (p[0] === 'host' && p[2] === 'log') html = pageHostLog(p[1]);
   else if (p[0] === 'host') html = pageEditor(p[1]);
   else if (p[0] === 'access') html = pageAccess();
+  else if (p[0] === 'certs') html = pageCerts();
   else if (p[0] === 'logs') html = pageLogs();
   else if (p[0] === 'settings') html = pageSettings();
   else html = shell('', '<div class="card empty">Page not found. <a href="#/">Go to overview</a></div>');
@@ -139,7 +140,7 @@ function renderLogin() {
 // ---------- shell ----------
 function aiOn() { return !!(S.settings && S.settings.ai && S.settings.ai.enabled); }
 function shell(active, body) {
-  const nav = [['overview', '#/', 'Overview'], ['hosts', '#/hosts', 'Hosts'], ['access', '#/access', 'Access lists'], ['logs', '#/logs', 'Logs &amp; stats']]
+  const nav = [['overview', '#/', 'Overview'], ['hosts', '#/hosts', 'Hosts'], ['access', '#/access', 'Access lists'], ['certs', '#/certs', 'Certificates'], ['logs', '#/logs', 'Logs &amp; stats']]
     .map(([k, h, l]) => `<a href="${h}" class="${active === k ? 'on' : ''}">${l}</a>`).join('');
   const c = S.status && S.status.caddy;
   const st = c ? (c.running ? '<span class="dot up"></span>Caddy running' : '<span class="dot down"></span>Caddy stopped') : '';
@@ -186,6 +187,13 @@ function destLabel(h) {
   return esc(h.upstreams.join(', ')) + (h.paths.length ? ` <span class="muted">+${h.paths.length} path${h.paths.length > 1 ? 's' : ''}</span>` : '');
 }
 
+function statTilesHTML(stats, opts = {}) {
+  if (!stats || stats.error) return `<div class="card muted">${stats && stats.error ? esc(stats.error) : 'Loading…'}</div>`;
+  const t = [['Requests', fmtN(stats.total)], ['Errors (5xx)', fmtN(stats.err5), stats.err5 ? 'var(--bad-ink)' : ''], ['Client errors (4xx)', fmtN(stats.err4), stats.err4 ? 'var(--warn-ink)' : '']];
+  if (opts.blocked) t.push(['Blocked (403)', fmtN(stats.blocked)]);
+  t.push(['Median response', stats.medianMs + ' ms'], ['Data served', fmtB(stats.bytes)]);
+  return `<section class="grid" aria-label="${esc(opts.label || 'Stats')}" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${t.map(([l, v, c]) => `<div class="stat"><div class="l">${l}</div><div class="v" style="${c ? 'color:' + c : ''}">${v}</div></div>`).join('')}</section>`;
+}
 function bars(buckets, height) {
   const max = Math.max(1, ...buckets.map((b) => b.ok + b.err));
   return `<div class="bars" style="height:${height || 140}px" role="img" aria-label="Requests over time">${buckets.map((b) => {
@@ -385,14 +393,13 @@ function pageOverview() {
     const s = hs(h.id);
     if (h.type === 'proxy' && s.health === 'down') att.push({ k: 'bad', t: `${hostName(h)} is down`, d: `${h.upstreams.join(', ')} isn't answering${s.error ? ' — ' + s.error : ''}`, act: `<a class="btn sm" href="#/host/${h.id}">Open host</a>`, ex: `Upstream for ${hostName(h)} (${h.upstreams.join(', ')}) is not reachable: ${s.error || 'connection failed'}`, hid: h.id });
     if (h.type === 'proxy' && s.health === 'slow') att.push({ k: 'warn', t: `${hostName(h)} is slow`, d: `Upstream took ${s.ms} ms to accept a connection`, act: `<a class="btn sm" href="#/host/${h.id}/log">View log</a>` });
-    if (s.cert === 'failed') att.push({ k: 'bad', t: `Certificate problem on ${hostName(h)}`, d: s.certError || 'Caddy could not get a certificate', act: `<a class="btn sm" href="#/host/${h.id}">Open host</a>`, ex: s.certError || 'Certificate could not be obtained for ' + hostName(h), hid: h.id });
-    if (s.cert === 'expiring') att.push({ k: 'warn', t: `Certificate for ${hostName(h)} expires in ${s.certDays} days`, d: 'Caddy renews certificates well before they expire, so renewal may be failing.', act: `<a class="btn sm" href="#/host/${h.id}">Open host</a>`, ex: `Certificate for ${hostName(h)} expires in ${s.certDays} days and has not been renewed`, hid: h.id });
+    if (s.cert === 'failed') att.push({ k: 'bad', t: `Certificate problem on ${hostName(h)}`, d: s.certError || 'Caddy could not get a certificate', act: `<button class="btn sm" data-a="cert-retry" data-h="${h.id}">Retry now</button><a class="btn sm" href="#/host/${h.id}">Open host</a>`, ex: s.certError || 'Certificate could not be obtained for ' + hostName(h), hid: h.id });
+    if (s.cert === 'expiring') att.push({ k: 'warn', t: `Certificate for ${hostName(h)} expires in ${s.certDays} days`, d: 'Caddy renews certificates well before they expire, so renewal may be failing.', act: `<button class="btn sm" data-a="cert-retry" data-h="${h.id}">Retry now</button><a class="btn sm" href="#/host/${h.id}">Open host</a>`, ex: `Certificate for ${hostName(h)} expires in ${s.certDays} days and has not been renewed`, hid: h.id });
   }
   const attHTML = att.length ? att.map((a, i) => `<div class="att ${a.k}"><span class="dot ${a.k === 'bad' ? 'down' : 'slow'}"></span><div style="flex:1 1 260px;min-width:0"><div class="t">${esc(a.t)}</div><div class="d">${esc(a.d)}</div></div>${a.act}${a.ex && aiOn() ? `<button class="btn sm ai" data-a="explain" data-err="${esc(a.ex)}" data-h="${a.hid || ''}">${I.sparkle}Explain</button>` : ''}</div>`).join('')
     : '<div class="att info"><span class="dot up"></span><div class="t">All good — nothing needs your attention.</div></div>';
   let traffic = '<div class="muted">Loading…</div>';
-  if (stats && !stats.error) traffic = `<div class="between" style="margin-bottom:14px"><h2 class="fill">Traffic · last 24 hours</h2>
-      <span class="muted">Requests <b style="color:var(--ink)">${fmtN(stats.total)}</b></span><span class="muted">5xx <b style="color:var(--ink)">${fmtN(stats.err5)}</b></span><span class="muted">Data <b style="color:var(--ink)">${fmtB(stats.bytes)}</b></span></div>
+  if (stats && !stats.error) traffic = `<div class="between" style="margin-bottom:14px"><h2 class="fill">Requests per hour</h2><span class="pill-status"><span class="dot" style="background:#FDBA74"></span>OK</span><span class="pill-status"><span class="dot down"></span>5xx</span><a href="#/logs" style="font-size:13px;font-weight:600">Open logs</a></div>
       ${bars(stats.buckets.map((b) => ({ ok: b.ok, err: b.err })))}${ticks(stats.from, stats.step, stats.buckets.length)}`;
   const tiles = hosts.length ? hosts.map((h) => { const s = hs(h.id); const [cls, lbl] = healthLabel(h, s); const per = stats && stats.perHost ? stats.perHost.find((x) => x.id === h.id) : null;
     return `<a class="tile" href="#/host/${h.id}"><div class="between"><span class="pill-status" style="color:var(--soft)"><span class="dot ${cls}"></span>${lbl}</span><span class="fill"></span>${h.type === 'proxy' ? certTag(h, s) : `<span class="tag t-${h.type}">${h.type === 'dead' ? '404' : 'Redirect'}</span>`}</div>
@@ -401,13 +408,15 @@ function pageOverview() {
     : `<div class="card empty">No hosts yet. <a href="#/host/new">Add your first host</a></div>`;
   const certCounts = { valid: 0, expiring: 0, failed: 0, pending: 0, http: 0 };
   hosts.filter((h) => h.enabled).forEach((h) => { const s = hs(h.id).cert; if (s in certCounts) certCounts[s]++; });
-  const events = (S.status.events || []).slice(-8).reverse();
+  const events = (S.status.events || []).filter((e, i, all) => !(all[i + 1] && all[i + 1].msg === e.msg && all[i + 1].identifier === e.identifier)).slice(-8).reverse();
   return shell('overview', `<p class="lead">A quick look at Caddy, your hosts, traffic and anything that needs fixing.</p>
     <section class="hero" aria-label="Status"><div style="flex:1 1 360px" class="stack s8">
       <span class="pill-status" style="color:#D6D3D1"><span class="dot ${c.running ? 'up' : 'down'}"></span>Caddy is ${c.running ? 'running' : 'stopped'}</span>
       <h1>${proxies.length ? `${healthy} of ${proxies.length} host${proxies.length > 1 ? 's' : ''} healthy` : hosts.length ? `${hosts.filter((h) => h.enabled).length} host${hosts.length > 1 ? 's' : ''} active` : 'Welcome'}</h1>
       <span class="sub">${c.running ? 'Started ' + ago(c.since) : ''}${S.state.manual ? ' · uploaded Caddyfile' : ''}</span></div>
       <div class="between"><a class="btn primary" href="#/host/new">${I.plus}Add host</a><button class="btn" data-a="restart-caddy">Restart Caddy</button></div></section>
+    <div class="between" style="margin-bottom:-8px"><h2 class="fill" style="font-size:15px;font-family:Inter,sans-serif;color:var(--muted);font-weight:600">Last 24 hours · all hosts</h2></div>
+    ${statTilesHTML(stats, { blocked: true, label: 'Last 24 hours' })}
     <div class="row"><div class="grow stack">
       <section class="card stack s8" aria-label="Needs attention"><h2>Needs attention</h2>${attHTML}</section>
       <section class="card" aria-label="Traffic">${traffic}</section>
@@ -416,7 +425,7 @@ function pageOverview() {
     <aside class="side stack">
       <section class="card stack s8"><h2>Certificates</h2>
         ${[['valid', 'Valid', 'up'], ['expiring', 'Expiring soon', 'slow'], ['failed', 'Failed', 'down'], ['pending', 'Waiting to be issued', 'na'], ['http', 'HTTP only', 'na']].filter(([k]) => certCounts[k] || k === 'valid').map(([k, l, d]) => `<div class="between"><span class="dot ${d}"></span><span class="fill">${l}</span><b>${certCounts[k]}</b></div>`).join('')}
-        <p class="hint">Caddy issues and renews certificates automatically.</p></section>
+        <p class="hint">Caddy issues and renews certificates automatically.</p><a href="#/certs" style="font-size:13px;font-weight:600">View all certificates</a></section>
       <section class="card stack s8"><h2>Recent activity</h2>${events.length ? events.map((e) => `<div class="ev"><span class="dot ${e.level === 'error' ? 'down' : e.level === 'warn' ? 'slow' : 'up'}"></span><div style="min-width:0"><div style="word-break:break-word">${esc(e.msg)}${e.identifier ? ' · ' + esc(e.identifier) : ''}</div>${e.error ? `<div class="muted mono" style="font-size:12px;word-break:break-word">${esc(e.error.slice(0, 220))}</div>` : ''}<div class="muted" style="font-size:12px">${ago(e.ts)}</div></div></div>`).join('') : '<p class="hint">Nothing yet.</p>'}
         <a href="#/logs" style="font-size:13px;font-weight:600">Open logs</a></section>
       <section class="card stack s8"><h2>Caddyfile</h2><p class="hint">Backed up automatically before every change.</p>
@@ -552,7 +561,7 @@ function pageEditor(id) {
     const s = hs(e.id);
     panel = `<div class="choice">${[['https', 'HTTPS', 'Encrypted, certificate managed for you'], ['http', 'HTTP only', 'Plain routing, no certificate']].map(([k, l, d]) => `<button type="button" class="${e.proto === k ? 'on' : ''}" data-a="proto" data-k="${k}" aria-pressed="${e.proto === k}"><b>${l}</b><span>${d}</span></button>`).join('')}</div>`;
     if (https) {
-      if (!P.data.isNew) panel += `<div class="note ${s.cert === 'valid' ? 'ok' : s.cert === 'failed' ? 'bad' : s.cert === 'expiring' ? 'warn' : ''} between"><span class="fill">${s.cert === 'valid' ? `Certificate valid · ${issuerName(s.certIssuer)}${s.certDays >= 1 ? ' · ' + s.certDays + ' days left' : ' · renewed automatically'}` : s.cert === 'expiring' ? `Expires in ${s.certDays} days` : s.cert === 'failed' ? 'Certificate failed: ' + esc(s.certError) : 'No certificate yet — Caddy gets one on the first request after applying.'}</span>${s.cert === 'failed' && aiOn() ? `<button class="btn sm ai" data-a="explain" data-err="${esc(s.certError)}" data-h="${e.id}">${I.sparkle}Explain</button>` : ''}</div>`;
+      if (!P.data.isNew) panel += `<div class="note ${s.cert === 'valid' ? 'ok' : s.cert === 'failed' ? 'bad' : s.cert === 'expiring' ? 'warn' : ''} between"><span class="fill">${s.cert === 'valid' ? `Certificate valid · ${issuerName(s.certIssuer)}${s.certDays >= 1 ? ' · ' + s.certDays + ' days left' : ' · renewed automatically'}` : s.cert === 'expiring' ? `Expires in ${s.certDays} days` : s.cert === 'failed' ? 'Certificate failed: ' + esc(s.certError) : 'No certificate yet — Caddy gets one on the first request after applying.'}</span>${s.cert !== 'valid' && s.cert !== 'http' && !P.data.isNew ? `<button class="btn sm" data-a="cert-retry" data-h="${e.id}">Retry now</button>` : ''}${s.cert === 'failed' && aiOn() ? `<button class="btn sm ai" data-a="explain" data-err="${esc(s.certError)}" data-h="${e.id}">${I.sparkle}Explain</button>` : ''}</div>`;
       panel += `<div class="stack s8"><span class="f">Certificate</span><div class="choice">${[['auto', 'Automatic', 'Let’s Encrypt / ZeroSSL'], ['dns', 'DNS challenge', 'Wildcards, hosts behind a firewall'], ['internal', 'Self-signed', 'Caddy’s local CA, for LAN'], ['custom', 'Upload my own', '.crt and .key files']].map(([k, l, d]) => `<button type="button" class="${e.cert === k ? 'on' : ''}" data-a="cert" data-k="${k}" aria-pressed="${e.cert === k}"><b>${l}</b><span>${d}</span></button>`).join('')}</div></div>`;
       if (e.cert === 'dns') panel += `<p class="note ${S.settings.hasDnsToken ? 'ai' : 'warn'}">Uses Cloudflare. ${S.settings.hasDnsToken ? 'Your API token is saved in Settings.' : 'Add your Cloudflare API token in <a href="#/settings">Settings</a> first.'}</p>`;
       if (e.cert === 'custom') panel += `<form id="certForm" class="line note"><label class="f" style="flex:1 1 200px">Certificate (.crt / .pem)<input type="file" name="cert" required></label><label class="f" style="flex:1 1 200px">Private key (.key)<input type="file" name="key" required></label><button class="btn sm" type="submit">Upload files</button></form><p class="hint">Upload the files first, then apply.</p>`;
@@ -617,7 +626,7 @@ function logPage(h) {
   if (!d.live && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   const s = h ? hs(h.id) : null;
   const ranges = `<div class="seg" role="group" aria-label="Range">${[['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d']].map(([k, l]) => `<button class="${d.range === k ? 'on' : ''}" data-a="lrange" data-k="${k}">${l}</button>`).join('')}</div>`;
-  const statTiles = stats && !stats.error ? `<section class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${[['Requests', fmtN(stats.total)], ['Errors (5xx)', fmtN(stats.err5), stats.err5 ? 'var(--bad-ink)' : ''], ['Client errors (4xx)', fmtN(stats.err4)], ['Median response', stats.medianMs + ' ms'], ['Data served', fmtB(stats.bytes)]].map(([l, v, c]) => `<div class="stat"><div class="l">${l}</div><div class="v" style="${c ? 'color:' + c : ''}">${v}</div></div>`).join('')}</section>` : `<div class="card muted">${stats && stats.error ? esc(stats.error) : 'Loading…'}</div>`;
+  const statTiles = statTilesHTML(stats);
   const chart = stats && !stats.error ? `<section class="card"><div class="between" style="margin-bottom:12px"><h2 class="fill" style="font-size:15px;font-family:Inter,sans-serif">Requests</h2><span class="pill-status"><span class="dot" style="background:#FDBA74"></span>OK</span><span class="pill-status"><span class="dot down"></span>5xx</span></div>${bars(stats.buckets, 120)}${ticks(stats.from, stats.step, stats.buckets.length)}</section>` : '';
   const codes = stats && !stats.error && !h ? `<section class="card stack s8"><h2>Responses</h2>${(() => { const t = Math.max(1, stats.total); const c = stats.codes; const col = { 2: '#22C55E', 3: '#60A5FA', 4: '#F59E0B', 5: '#DC2626' }; return `<div class="split">${[2, 3, 4, 5].map((k) => c[k] ? `<span style="width:${(c[k] / t) * 100}%;background:${col[k]}"></span>` : '').join('')}</div>` + [[2, 'OK'], [3, 'Redirect'], [4, 'Client error'], [5, 'Server error']].map(([k, l]) => `<div class="between" style="font-size:14px"><span class="dot" style="background:${col[k]};border-radius:3px"></span><span class="fill">${k}xx ${l}</span><b>${((c[k] / t) * 100).toFixed(1)}%</b></div>`).join(''); })()}</section>` : '';
   const perHost = stats && !stats.error && !h ? `<section class="card flush"><h2 style="padding:16px 20px">By host</h2><div class="tbl-wrap"><table style="min-width:560px"><thead><tr><th>Host</th><th style="text-align:right">Requests</th><th style="text-align:right">5xx</th><th style="text-align:right">Avg response</th><th style="text-align:right">Data</th></tr></thead><tbody>${stats.perHost.length ? stats.perHost.map((p) => `<tr class="hover"><td><a href="#/host/${p.id}/log" style="color:var(--ink);font-weight:600">${esc(p.domain)}</a></td><td class="mono" style="text-align:right">${fmtN(p.req)}</td><td class="mono" style="text-align:right;${p.err ? 'color:var(--bad-ink)' : ''}">${fmtN(p.err)}</td><td class="mono" style="text-align:right">${p.avgMs} ms</td><td class="mono" style="text-align:right">${fmtB(p.bytes)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No hosts yet.</td></tr>'}</tbody></table></div></section>` : '';
@@ -671,6 +680,40 @@ const renderListSnippet = debounce(async () => {
 }, 250);
 function listsForSave() {
   return P.data.lists.map((l) => ({ id: l.id, name: l.name, pass: !!l.pass, satisfy: l.satisfy || 'any', users: l.users.filter((u) => u.name.trim()).map((u) => ({ name: u.name.trim(), password: u.password || undefined })), rules: l.rules.filter((r) => r.cidr.trim()).map((r) => ({ act: r.act, cidr: r.cidr.trim() })) }));
+}
+
+// ---------- pages: certificates ----------
+function pageCerts() {
+  if (!pollTimer) pollTimer = setInterval(async () => { if ($modal.innerHTML) return; await refreshStatus(); rerender(); }, 15000);
+  const hosts = S.state.hosts.filter((h) => h.enabled);
+  const fmtDate = (sec) => new Date(sec * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const rows = hosts.map((h) => {
+    const s = hs(h.id);
+    let tag, detail = '';
+    if (h.proto === 'http') { tag = '<span class="tag t-muted">HTTP only</span>'; detail = 'No certificate: this host is served over plain HTTP.'; }
+    else if (s.cert === 'valid') { tag = `<span class="tag ${h.domains.some((d) => d.startsWith('*.')) ? 't-wild' : 't-ok'}">Valid</span>`; detail = s.certDays >= 1 ? `Renews automatically · ${s.certDays} days left` : 'Short-lived certificate, renewed automatically'; }
+    else if (s.cert === 'expiring') { tag = `<span class="tag t-warn">Expiring</span>`; detail = `Only ${s.certDays} days left. Caddy should have renewed it by now.`; }
+    else if (s.cert === 'failed') { tag = '<span class="tag t-bad">Failed</span>'; detail = s.certError || 'Caddy could not get a certificate.'; }
+    else { tag = '<span class="tag t-muted">Waiting</span>'; detail = h.cert === 'dns' && !S.settings.hasDnsToken ? 'Needs a Cloudflare token in Settings.' : 'Not issued yet. Caddy requests it right after you apply; check DNS and ports 80/443 if it stays here.'; }
+    const method = h.proto === 'http' ? '—' : { auto: 'Automatic', dns: 'DNS challenge', internal: 'Self-signed', custom: 'Your files' }[h.cert];
+    const canRetry = h.proto === 'https' && h.cert !== 'custom' && s.cert !== 'valid';
+    return `<tr class="hover"><td><a href="#/host/${h.id}" style="color:var(--ink);font-weight:600;text-decoration:none">${esc(hostName(h))}</a>${h.domains.length > 1 ? `<div class="muted" style="font-size:12.5px">+ ${h.domains.slice(1).map(esc).join(', ')}</div>` : ''}</td>
+      <td>${tag}</td><td style="font-size:13px;color:var(--soft);white-space:nowrap">${method}${s.certIssuer && s.cert !== 'failed' ? '<div class="muted" style="font-size:12px">' + issuerName(s.certIssuer) + '</div>' : ''}</td>
+      <td style="font-size:13px;white-space:nowrap">${s.certUntil ? fmtDate(s.certUntil) : '—'}</td>
+      <td style="font-size:13px;color:${s.cert === 'failed' ? 'var(--bad-ink)' : 'var(--soft)'};max-width:380px;word-break:break-word">${esc(detail)}</td>
+      <td style="text-align:right;white-space:nowrap">${canRetry ? `<button class="btn sm" data-a="cert-retry" data-h="${h.id}">Retry now</button>` : ''}${s.cert === 'failed' && aiOn() ? ` <button class="btn sm ai" data-a="explain" data-err="${esc(s.certError)}" data-h="${h.id}">${I.sparkle}Explain</button>` : ''}</td></tr>`;
+  }).join('');
+  // certificates Caddy holds that no managed host uses (e.g. sites kept as written)
+  const managed = hosts.flatMap((h) => h.domains);
+  const covered = (n) => managed.some((d) => d === n || (n.startsWith('*.') && d.endsWith(n.slice(1))) || (d.startsWith('*.') && n.endsWith(d.slice(1))));
+  const other = (S.status.certList || []).filter((c) => !c.names.some(covered));
+  const counts = { valid: 0, expiring: 0, failed: 0, waiting: 0 };
+  hosts.filter((h) => h.proto === 'https').forEach((h) => { const c = hs(h.id).cert; counts[c === 'pending' || c === 'none' ? 'waiting' : c] = (counts[c === 'pending' || c === 'none' ? 'waiting' : c] || 0) + 1; });
+  return shell('certs', `<div class="between"><div class="fill"><h1>Certificates</h1><p class="lead">The HTTPS certificate behind each host: whether it’s valid, who issued it and when it expires. Caddy renews them on its own; retry here if one failed.</p></div>
+    <button class="btn" data-a="cert-retry" data-h="">Retry all missing</button></div>
+    <section class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">${[['Valid', counts.valid, ''], ['Expiring', counts.expiring, counts.expiring ? 'var(--warn-ink)' : ''], ['Failed', counts.failed, counts.failed ? 'var(--bad-ink)' : ''], ['Waiting', counts.waiting, '']].map(([l, v, c]) => `<div class="stat"><div class="l">${l}</div><div class="v" style="${c ? 'color:' + c : ''}">${v}</div></div>`).join('')}</section>
+    <div class="card flush"><div class="tbl-wrap"><table style="min-width:860px"><thead><tr><th>Host</th><th>Status</th><th>Method</th><th>Expires</th><th>Details</th><th><span class="sr">Actions</span></th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No hosts yet.</td></tr>'}</tbody></table></div></div>
+    ${other.length ? `<section class="card flush"><h2 style="padding:16px 20px 4px">Other certificates</h2><p class="hint" style="padding:0 20px 8px">Held by Caddy for names that no managed host uses, such as sites kept as written.</p><div class="tbl-wrap"><table style="min-width:560px"><thead><tr><th>Names</th><th>Issuer</th><th>Expires</th></tr></thead><tbody>${other.map((c) => `<tr><td class="mono" style="word-break:break-all">${c.names.map(esc).join(', ')}</td><td style="font-size:13px">${issuerName(c.issuer)}</td><td style="font-size:13px;white-space:nowrap">${fmtDate(c.notAfter)}</td></tr>`).join('')}</tbody></table></div></section>` : ''}`);
 }
 
 // ---------- pages: settings ----------
@@ -767,6 +810,14 @@ const ACT = {
   restore: async (el) => {
     openModal('Restore backup', '<span class="spin"></span>');
     try { const r = await post('/api/backups/restore', { id: el.dataset.id }); REVIEW = { payload: {}, label: r.label, after: null, res: r }; showReview(r); } catch (e) { setModalBody(`<div class="note bad">${esc(e.message)}</div>`); }
+  },
+  'cert-retry': async (el) => {
+    el.disabled = true; el.textContent = 'Retrying…';
+    try {
+      await post('/api/certs/retry', { hostId: el.dataset.h || '' });
+      toast('Caddy is requesting the certificate again — this can take up to a minute');
+      setTimeout(async () => { await refreshStatus(); rerender(); }, 4000);
+    } catch (e) { toast(e.message, true); el.disabled = false; el.textContent = 'Retry now'; }
   },
   'restart-caddy': async (el) => { el.disabled = true; try { await post('/api/caddy/restart'); toast('Caddy restarted'); await refreshStatus(); } catch (e) { toast(e.message, true); } rerender(); },
   unmanual: () => review({ managed: true }, 'Switch back to managed hosts'),

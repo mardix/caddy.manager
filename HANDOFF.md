@@ -162,6 +162,9 @@ Restoring a backup goes through the same preview → apply path.
 - **Stats and logs** read only the current `access.log` (up to 50 MiB, 300k entries in memory). Rolled files are ignored,
   so "7 days" may be partial on busy sites.
 - **Health checks** are TCP connects every 30 s, not HTTP requests.
+- **Certificate retry** (`POST /api/certs/retry`) is a forced `caddy reload`, which cancels Caddy's back-off and starts new
+  issuance attempts for every name without a certificate. Let's Encrypt still rate-limits failed validations (about 5 per hour per
+  hostname); after repeated failures Caddy also tries its fallback issuer (ZeroSSL).
 - **Certificate "expiring"** means less than 20 % of the certificate's lifetime is left. Caddy renews at about 33 %, so this signals that renewal is behind.
 - **DNS challenge** supports Cloudflare only. Other providers need another plugin in the Dockerfile and a matching option in the UI.
 - **No TCP/UDP streams:** they would need the `caddy-l4` plugin.

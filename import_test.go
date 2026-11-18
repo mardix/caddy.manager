@@ -178,3 +178,44 @@ func TestImportRejects(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestImportHostHeaderNoop(t *testing.T) {
+	src, err := os.ReadFile("/tmp/user.Caddyfile")
+	if err != nil {
+		t.Skip("sample not present")
+	}
+	res, err := importCaddyfile(string(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range res.Items {
+		t.Logf("%-40s managed=%v %v", it.Name, it.Managed, it.Notes)
+		if !it.Managed {
+			t.Errorf("%s should be managed", it.Name)
+		}
+	}
+	if res.ExtraConfig != "" {
+		t.Errorf("nothing should be kept as written, got:\n%s", res.ExtraConfig)
+	}
+	st := State{Hosts: res.Hosts}
+	if err := validateState(&st); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("CADDY_BIN") != "" {
+		c := &Caddy{bin: os.Getenv("CADDY_BIN"), dataDir: t.TempDir()}
+		c.setEnv("")
+		if err := c.Validate(generate(&st, Settings{}, t.TempDir())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// a header_up that does change something becomes a "to upstream" header
+	r2, _ := importCaddyfile("a.com {\n reverse_proxy x:1 {\n  header_up X-Real-IP {remote_host}\n  header_down Strict-Transport-Security max-age=300\n }\n}\n")
+	if !r2.Items[0].Managed || len(r2.Hosts[0].Headers) != 2 || r2.Hosts[0].Headers[0].Kind != "req" || r2.Hosts[0].Headers[1].Kind != "res" {
+		t.Errorf("header_up/down mapping: %+v", r2.Hosts)
+	}
+	// placeholders that only exist inside reverse_proxy must keep the site as written
+	r3, _ := importCaddyfile("a.com {\n reverse_proxy x:1 {\n  header_up Host {upstream_hostport}\n }\n}\n")
+	if r3.Items[0].Managed {
+		t.Error("{upstream_hostport} must not be converted")
+	}
+}

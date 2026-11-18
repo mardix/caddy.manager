@@ -17,7 +17,8 @@ answers questions about your traffic and logs, and suggests fixes for you to rev
 - **Extras:** load balancing with health checks, custom headers, maintenance mode, exploit blocking, compression, static caching
 - **Safe changes:** `caddy validate` before every apply, a line-by-line diff, automatic backups with one-click restore
 - **Caddyfile:** download the active file, or upload an existing one to **import its sites as managed hosts** (or run it as-is)
-- **Monitoring:** upstream health checks, certificate status, traffic stats and a searchable, downloadable log per host
+- **Monitoring:** upstream health checks, traffic stats on the overview, and a searchable, downloadable log per host
+- **Certificates:** one page listing every certificate with its status, issuer and expiry, plus **Retry now** when issuing fails
 - **Optional AI assistant:** Anthropic, OpenAI, any OpenAI-compatible endpoint, or Ollama. It explains errors, answers questions about your logs, and drafts host changes for you to review. It never applies anything itself.
 
 ## Quick start (Docker)
@@ -95,6 +96,12 @@ Caddy validates the new config, upstreams are checked, and you see exactly what 
 The current Caddyfile is backed up first.
 
 ![Review](docs/screenshots/review.png)
+
+### Certificates
+Every host's certificate in one list. If one fails (DNS not pointing here yet, port 80 blocked), fix the cause and press
+**Retry now**: Caddy requests it again immediately instead of waiting out its back-off.
+
+![Certificates](docs/screenshots/certificates.png)
 
 ### Access lists
 Logins and IP rules defined once and reused on any host.
