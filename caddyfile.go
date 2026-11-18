@@ -208,7 +208,20 @@ func generate(st *State, set Settings, dataDir string) string {
 	if set.Email != "" {
 		w.line("email %s", set.Email)
 	}
+	if g := strings.TrimSpace(st.GlobalExtra); g != "" {
+		w.line("")
+		w.line("# Extra global options")
+		for _, l := range strings.Split(g, "\n") {
+			w.line("%s", strings.TrimRight(l, " \t\r"))
+		}
+	}
 	w.close()
+	if x := strings.TrimSpace(st.ExtraConfig); x != "" {
+		w.line("")
+		w.line("# ---- Kept exactly as written (Settings → Extra Caddyfile config) ----")
+		w.b.WriteString(x + "\n")
+		w.line("# ---- end of kept config ----")
+	}
 	used := map[string]bool{}
 	for _, h := range st.Hosts {
 		if h.Enabled && h.Type == "proxy" && h.Access.Mode == "list" {

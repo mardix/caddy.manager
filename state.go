@@ -85,6 +85,8 @@ type State struct {
 	AccessLists     []AccessList `json:"accessLists"`
 	Manual          bool         `json:"manual"`
 	ManualCaddyfile string       `json:"manualCaddyfile,omitempty"`
+	GlobalExtra     string       `json:"globalExtra"` // extra global options, written as-is
+	ExtraConfig     string       `json:"extraConfig"` // sites/snippets kept exactly as written
 }
 
 type AISettings struct {
@@ -200,6 +202,9 @@ func validateUsersRules(users []User, rules []Rule, where string) error {
 			return fmt.Errorf("%s: username %q is listed twice", where, u.Name)
 		}
 		seen[u.Name] = true
+		if u.Hash != "" && !reBcrypt.MatchString(u.Hash) {
+			return fmt.Errorf("%s: the saved password for %q isn't a bcrypt hash", where, u.Name)
+		}
 		if u.Hash == "" && u.Password == "" {
 			return fmt.Errorf("%s: set a password for %q", where, u.Name)
 		}
@@ -263,6 +268,12 @@ func normalizeHost(h *Host) {
 }
 
 func validateState(st *State) error {
+	for _, l := range strings.Split(st.GlobalExtra, "\n") {
+		f := strings.Fields(l)
+		if len(f) > 0 && (f[0] == "admin" || f[0] == "email") {
+			return errors.New("extra global options can't set admin or email (email is in Settings)")
+		}
+	}
 	seenDomain := map[string]string{}
 	listIDs := map[string]bool{}
 	for i := range st.AccessLists {

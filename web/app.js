@@ -61,7 +61,7 @@ let pollTimer = null;
 
 async function loadState() {
   const [st, status, settings] = await Promise.all([api('/api/state'), api('/api/status'), api('/api/settings')]);
-  S.state = st.state; S.caddyfile = st.caddyfile; S.status = status; S.settings = settings;
+  S.state = st.state; S.caddyfile = st.caddyfile; S.kept = st.keptSites || []; S.status = status; S.settings = settings;
 }
 async function refreshStatus() { try { S.status = await api('/api/status'); } catch (e) { } }
 
@@ -143,7 +143,7 @@ function shell(active, body) {
     .map(([k, h, l]) => `<a href="${h}" class="${active === k ? 'on' : ''}">${l}</a>`).join('');
   const c = S.status && S.status.caddy;
   const st = c ? (c.running ? '<span class="dot up"></span>Caddy running' : '<span class="dot down"></span>Caddy stopped') : '';
-  const manual = S.state && S.state.manual ? `<div class="note warn between"><span class="fill"><b>Running an uploaded Caddyfile.</b> Host and access-list changes are saved but won't take effect until you switch back to managed hosts.</span><button class="btn sm" data-a="unmanual">Switch back to managed hosts</button></div>` : '';
+  const manual = S.state && S.state.manual ? `<div class="note warn between"><span class="fill"><b>Running an uploaded Caddyfile as-is.</b> Its sites aren't listed as hosts. Import it to manage each site here.</span><button class="btn sm primary" data-a="import-current">Import as hosts</button><button class="btn sm" data-a="unmanual">Switch back to managed hosts</button></div>` : '';
   return `<div class="wrap"><header class="top">
     <a class="logo" href="#/">caddy<b>.</b>manager</a>
     <nav class="nav" aria-label="Main">${nav}</nav>
@@ -295,6 +295,28 @@ async function doApply(btn) {
 }
 function saveHosts(hosts, label, after) { return review({ hosts }, label, after); }
 
+// ---------- import ----------
+let IMPORT_TEXT = '';
+async function openImport(text) {
+  IMPORT_TEXT = text;
+  openModal('Import Caddyfile', '<div class="between"><span class="spin"></span><span class="muted">Reading the file…</span></div>', { width: 860 });
+  let r;
+  try { r = await post('/api/import', { caddyfile: text }); }
+  catch (e) {
+    setModalBody(`<div class="ck fail">${I.alert}<span><b>Can’t import this file</b>${esc(e.message)}</span></div>
+      <div class="between"><button class="btn" data-a="import-asis">Run it as-is instead</button><span class="fill"></span><button class="btn ghost" data-a="close-modal">Cancel</button></div>`);
+    return;
+  }
+  const res = r.result, managed = res.items.filter((i) => i.managed), kept = res.items.filter((i) => !i.managed);
+  const label = { proxy: 'Proxy', redirect: 'Redirect', dead: '404 host' };
+  setModalBody(`<p style="margin:0;font-size:15px"><b>${res.items.length} site${res.items.length === 1 ? '' : 's'} found.</b> ${managed.length} ${managed.length === 1 ? 'becomes a managed host' : 'become managed hosts'} you can edit here${kept.length ? `; ${kept.length} ${kept.length === 1 ? 'is' : 'are'} kept exactly as written because ${kept.length === 1 ? 'it uses' : 'they use'} features the editor doesn’t manage` : ''}.</p>
+    <div class="stack s8" style="max-height:42vh;overflow:auto">${res.items.map((i) => `<div class="note ${i.managed ? '' : 'warn'}" style="display:flex;gap:10px;align-items:flex-start"><span class="tag ${i.managed ? 't-' + i.type : 't-muted'}" style="flex-shrink:0">${i.managed ? label[i.type] : 'Kept as written'}</span><div style="min-width:0"><b style="overflow-wrap:anywhere">${esc(i.name)}</b>${i.notes.map((n) => `<div class="hint">${esc(n)}</div>`).join('')}</div></div>`).join('')}</div>
+    ${res.email || res.globalNotes.length ? `<div class="note">${res.email ? `Certificate email <b>${esc(res.email)}</b> will be used if none is set in Settings.<br>` : ''}${res.globalNotes.map(esc).join('<br>')}</div>` : ''}
+    ${res.localhost.length ? `<label class="chk note warn" style="padding:12px 14px"><input type="checkbox" id="impRewrite" ${r.inDocker ? 'checked' : ''}><span><b>Point localhost upstreams at the Docker host</b><small>${res.localhost.map(esc).join(', ')} → host.docker.internal. Inside the container, localhost is the container itself, so these would fail as written.</small></span></label>` : ''}
+    <p class="hint">Your current hosts stay; a host with the same domain is replaced. Nothing changes until you apply.</p>
+    <div class="between"><button class="btn primary" data-a="import-go">Review import</button><button class="btn" data-a="import-asis">Run as-is instead</button><span class="fill"></span><button class="btn ghost" data-a="close-modal">Cancel</button></div>`);
+}
+
 // ---------- AI: explain & ask ----------
 async function explain(error, hostId) {
   openModal('What went wrong', `<div class="note bad mono" style="white-space:pre-wrap">${esc(error)}</div><div class="between"><span class="spin"></span><span class="muted">Checking DNS, upstreams and recent events…</span></div>`, { icon: `<span style="color:var(--ai)">${I.sparkle}</span>` });
@@ -424,13 +446,14 @@ function pageHosts() {
     body = `<div class="between"><div class="chips fill" role="group" aria-label="Filter by type">${[['all', 'All'], ['proxy', 'Proxy'], ['redirect', 'Redirect'], ['dead', '404']].map(([k, l]) => `<button class="chip ${P.data.filter === k ? 'on' : ''}" data-a="hfilter" data-k="${k}" aria-pressed="${P.data.filter === k}">${l}<span>${count(k)}</span></button>`).join('')}</div>
       <label class="sr" for="hq">Search hosts</label><input id="hq" class="in" type="search" placeholder="Search domains or upstreams" value="${esc(P.data.q)}" style="max-width:300px"></div>
       <div class="card flush"><div class="tbl-wrap"><table style="min-width:860px"><thead><tr><th>Source</th><th>Destination</th><th>SSL</th><th>Access</th><th>Status</th><th>On</th><th><span class="sr">Actions</span></th></tr></thead><tbody id="hostsBody">${hostRows()}</tbody></table></div></div>
-      <p class="hint">Turning a host off removes it from the Caddyfile but keeps its settings.</p>`;
+      <p class="hint">Turning a host off removes it from the Caddyfile but keeps its settings.</p>
+      ${S.kept.length ? `<section class="card stack s8"><div class="between"><h2 class="fill">Kept as written · ${S.kept.length}</h2><a href="#/settings" style="font-size:13px;font-weight:600">Edit in Settings</a></div><p class="hint">These sites came from an imported Caddyfile and use features the editor doesn't manage, so they run exactly as written.</p><div class="chips">${S.kept.map((k) => `<span class="tag t-muted" style="font-size:12.5px;padding:6px 10px">${esc(k)}</span>`).join('')}</div></section>` : ''}`;
   }
   onAfter(() => {
     const qi = document.getElementById('hq');
     if (qi) qi.oninput = () => { P.data.q = qi.value; document.getElementById('hostsBody').innerHTML = hostRows(); };
     const up = document.getElementById('cfUpload');
-    if (up) up.onchange = async () => { const f = up.files[0]; if (!f) return; const text = await f.text(); review({ caddyfile: text }, 'Upload Caddyfile', () => { P.data.view = 'file'; rerender(); }); };
+    if (up) up.onchange = async () => { const f = up.files[0]; if (!f) return; const text = await f.text(); up.value = ''; openImport(text); };
   });
   return shell('hosts', `<div class="between"><div class="fill"><h1>Hosts</h1><p class="lead">Every domain Caddy serves: where it forwards, its certificate, who can open it and whether it’s up.</p></div>
     <div class="seg" role="group" aria-label="View"><button class="${view === 'list' ? 'on' : ''}" data-a="hview" data-k="list">List</button><button class="${view === 'file' ? 'on' : ''}" data-a="hview" data-k="file">Caddyfile</button></div>
@@ -653,7 +676,7 @@ function listsForSave() {
 // ---------- pages: settings ----------
 function pageSettings() {
   const d = P.data;
-  if (!d.set) d.set = { email: S.settings.email || '', dnsToken: '', ai: { enabled: false, provider: 'anthropic', baseUrl: '', apiKey: '', model: '', maskIps: false, ...clone(S.settings.ai || {}), apiKey: '' } };
+  if (!d.set) d.set = { globalExtra: S.state.globalExtra || '', extraConfig: S.state.extraConfig || '', email: S.settings.email || '', dnsToken: '', ai: { enabled: false, provider: 'anthropic', baseUrl: '', apiKey: '', model: '', maskIps: false, ...clone(S.settings.ai || {}), apiKey: '' } };
   const a = d.set.ai;
   const prov = [['anthropic', 'Anthropic', 'Claude models · API key'], ['openai', 'OpenAI', 'GPT models · API key'], ['compat', 'OpenAI-compatible', 'OpenRouter, LM Studio, vLLM…'], ['ollama', 'Ollama', 'Runs on your machine']];
   const needsKey = a.provider !== 'ollama';
@@ -679,6 +702,17 @@ function pageSettings() {
       ${S.settings.hasDnsToken ? '<button class="btn sm ghost" data-a="clear-dns" style="align-self:flex-start;color:#B91C1C">Remove saved token</button>' : ''}
     </section>
     <div class="between"><button class="btn primary" data-a="settings-save">Save settings</button></div>
+    <section class="card stack"><div><h2>Extra Caddyfile config</h2><p class="hint" style="margin-top:4px">Written into the Caddyfile exactly as typed. Imports put global options and any sites the editor can't manage here.</p></div>
+      <label class="f">Extra global options<textarea class="in mono" rows="4" data-sf="globalExtra" placeholder="servers {
+	timeouts {
+		read_body 30s
+	}
+}">${esc(d.set.globalExtra)}</textarea></label>
+      <label class="f">Extra sites and snippets<textarea class="in mono" rows="10" data-sf="extraConfig" placeholder="static.example.com {
+	root * /srv/www
+	file_server
+}">${esc(d.set.extraConfig)}</textarea></label>
+      <div class="between"><button class="btn" data-a="extra-save">Review &amp; apply</button><span class="hint">Checked by Caddy before it’s applied.</span></div></section>
     </div>
     <aside class="side stack"><section class="card stack s8"><h2>Caddy</h2><p class="hint">${S.status.caddy.running ? 'Running.' : 'Stopped: ' + esc(S.status.caddy.error)}</p><button class="btn" data-a="restart-caddy" style="align-self:flex-start">Restart Caddy</button></section>
       <section class="card stack s8"><h2>Account</h2><p class="hint">Single admin. Change the password with ADMIN_PASSWORD in docker-compose and restart the container.</p><button class="btn" data-a="logout" style="align-self:flex-start">Sign out</button></section></aside></div>`);
@@ -736,6 +770,10 @@ const ACT = {
   },
   'restart-caddy': async (el) => { el.disabled = true; try { await post('/api/caddy/restart'); toast('Caddy restarted'); await refreshStatus(); } catch (e) { toast(e.message, true); } rerender(); },
   unmanual: () => review({ managed: true }, 'Switch back to managed hosts'),
+  'import-current': () => openImport(S.state.manualCaddyfile || S.caddyfile),
+  'import-go': () => { const rw = document.getElementById('impRewrite'); review({ import: { caddyfile: IMPORT_TEXT, rewriteLocalhost: !!(rw && rw.checked) } }, 'Import Caddyfile', () => { location.hash = '#/hosts'; P.key = ''; render(); }); },
+  'import-asis': () => review({ caddyfile: IMPORT_TEXT }, 'Run Caddyfile as-is', () => { location.hash = '#/hosts'; P.key = ''; render(); }),
+  'extra-save': () => review({ globalExtra: P.data.set.globalExtra, extraConfig: P.data.set.extraConfig }, 'Update extra Caddyfile config', () => { delete P.data.set; rerender(); }),
   logout: async () => { await post('/api/logout'); S.authed = false; renderLogin(); },
   // hosts list
   hfilter: (el) => { P.data.filter = el.dataset.k; rerender(); },

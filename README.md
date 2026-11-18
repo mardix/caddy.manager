@@ -16,7 +16,7 @@ answers questions about your traffic and logs, and suggests fixes for you to rev
 - **HTTPS:** automatic (Let’s Encrypt / ZeroSSL), DNS challenge via Cloudflare, self-signed, your own files, or plain HTTP
 - **Extras:** load balancing with health checks, custom headers, maintenance mode, exploit blocking, compression, static caching
 - **Safe changes:** `caddy validate` before every apply, a line-by-line diff, automatic backups with one-click restore
-- **Caddyfile:** download the active file, or upload your own and run it as-is
+- **Caddyfile:** download the active file, or upload an existing one to **import its sites as managed hosts** (or run it as-is)
 - **Monitoring:** upstream health checks, certificate status, traffic stats and a searchable, downloadable log per host
 - **Optional AI assistant:** Anthropic, OpenAI, any OpenAI-compatible endpoint, or Ollama. It explains errors, answers questions about your logs, and drafts host changes for you to review. It never applies anything itself.
 
@@ -130,7 +130,11 @@ that opens in the editor for you to review. Password hashes and API tokens are n
 - **Wildcard certificates:** add a Cloudflare API token (Zone → DNS → Edit) in Settings, then choose **DNS challenge** on the host.
 - **Admin UI over HTTPS:** add a proxy host such as `admin.example.com → localhost:8080` and protect it with an access list.
   To keep port 8080 off the network, change it to `"127.0.0.1:8080:8080"` in `docker-compose.yml`.
-- **Uploaded Caddyfiles** run as-is until you choose **Switch back to managed hosts**. They aren't converted into editable hosts.
+- **Migrating an existing Caddyfile:** upload it from Hosts → Caddyfile and choose **Review import**. Each site becomes a managed host
+  (proxy, redirect, 404, path routes, logins, load balancing, headers, `tls internal` / Cloudflare DNS). Sites using anything the editor
+  doesn't manage (e.g. `file_server`, matchers, `header_up`, certificate files) are kept exactly as written under
+  Settings → Extra Caddyfile config, so nothing is lost. `localhost` upstreams can be pointed at `host.docker.internal` during import.
+  **Run as-is instead** keeps the old behaviour: the file runs unchanged and nothing is listed as hosts.
 - **Data:** everything lives in `./data`: `state.json` (hosts and access lists), `settings.json`, the active `Caddyfile`,
   certificates (`data/caddy`), logs and the last 30 backups.
 - **Password:** changing `ADMIN_PASSWORD` and restarting signs out existing sessions.

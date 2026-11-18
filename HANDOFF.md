@@ -1,33 +1,37 @@
 # Handoff: caddy.manager
- 
+
 A single-user web UI that manages a Caddy reverse proxy. One Go binary serves the UI and supervises Caddy.
 This file covers how it's built, what has been verified, and what is still open.
- 
+
 ## Status
- 
+
 **Working, verified locally against real Caddy 2.11.9:**
 - Every host type, routing, access control, backups and restore, uploading your own Caddyfile, stats and logs.
 - The full UI in a headless browser at desktop and phone widths.
+
 **Not yet verified:**
 - **Docker image:** the build itself. There was no Docker daemon or Docker Hub access in the build environment.
 - **GitHub Actions:** the workflow hasn't run yet.
 - **Real certificates:** Let's Encrypt issuance on a public domain.
 - **Wildcard certificates:** the Cloudflare DNS plugin.
 - **AI:** real providers. Only a mock that speaks both the Anthropic and OpenAI formats was used.
+
 **First things to do:**
 1. Push to GitHub and watch the workflow.
 2. Run the image on a server with a real domain.
 3. Try a real AI key under Settings → Test connection.
+
 ## Stack
- 
+
 - **Backend:** Go 1.24, standard library only, no third-party modules.
 - **Frontend:** plain HTML, CSS and JavaScript in `web/`, embedded with `go:embed`. No framework, no build step.
 - **Runtime:**
   - The manager starts `caddy run` as a child process and reloads it with `caddy reload`.
   - Caddy's admin API listens only on `localhost:2019`.
   - The Docker image is the official `caddy:2` with Caddy rebuilt to include `caddy-dns/cloudflare`.
+
 ## File map
- 
+
 | File | What it does |
 | --- | --- |
 | `main.go` | HTTP server, auth, all `/api/*` handlers: preview/apply, backups, status, stats, logs, settings, cert upload |
@@ -39,13 +43,14 @@ This file covers how it's built, what has been verified, and what is still open.
 | `aihandler.go` | `/api/ai`: builds context for `logs`, `explain` and `ask`; turns "ask" replies into a host proposal |
 | `web/app.js` | The whole UI: hash router, pages, review modal, diff, AI panels |
 | `web/app.css`, `web/index.html` | Styles and shell |
-| `gen_test.go` | Generator validated by real `caddy validate`, injection rejection, redaction |
+| `importer.go` | Caddyfile parser and converter for imports |
+| `gen_test.go`, `import_test.go` | Generator and import output validated by real `caddy validate`, injection rejection, redaction |
 | `run.sh` | Local run without Docker (`./run.sh`, `./run.sh test`) |
 | `Dockerfile`, `docker-compose.yml`, `.github/workflows/docker.yml` | Image, compose file, CI (test → build to GHCR → optional SSH deploy) |
 | `docs/screenshots/` | README screenshots (demo data) |
- 
+
 ## How a change flows
- 
+
 1. The UI sends the full new host list and/or access lists to `POST /api/preview`.
 2. The server works out the new config:
    - It keeps existing password hashes for users sent without a new password (`mergeHashes`).
@@ -62,14 +67,25 @@ This file covers how it's built, what has been verified, and what is still open.
    - It writes the new Caddyfile and runs `caddy reload`.
    - **If the reload fails, it puts back the previous file and reloads again**, so the old config keeps running.
    - State is only saved after a successful reload.
+
 Restoring a backup goes through the same preview → apply path.
- 
-**Manual mode:** an uploaded Caddyfile is stored as `ManualCaddyfile` and used verbatim instead of the generated one.
+
+**Import (`importer.go`):** `POST /api/import` analyzes an uploaded file; preview with `import: {caddyfile, rewriteLocalhost}` applies it.
+- A small Caddyfile lexer and parser builds a tree. Snippets are expanded. Heredocs and single-site files without braces are refused (use run as-is).
+- A site becomes a managed host only if **every** directive maps faithfully (`convertSite`); otherwise the whole site is kept
+  verbatim (with comments) in `State.ExtraConfig`. This is deliberate: a partial conversion could silently drop auth or routing.
+  `header`/`request_header`/`request_body` variants that don't map are kept per host as custom directives.
+- Global options: `email` goes to Settings if none is set, `admin` is dropped, everything else goes to `State.GlobalExtra`.
+- Imported hosts are added; existing hosts with the same domain are replaced. `ExtraConfig`/`GlobalExtra` are written right after the
+  global block and are editable in Settings.
+
+**Manual mode (run as-is):** an uploaded Caddyfile is stored as `ManualCaddyfile` and used verbatim instead of the generated one.
 - Hosts are kept but not applied.
 - "Switch back to managed hosts" previews with `managed: true`.
 - Uploaded files are **not** parsed into hosts. That's deliberate, to keep the app simple.
+
 ## Generated Caddyfile: things worth knowing
- 
+
 - **One `route { }` block per proxy host** holds exploit blocking, access rules, maintenance, encode, headers and the
   `handle`/`handle_path` blocks. `route` keeps directives in written order, so IP and login checks always run before proxying.
   Caddy's default directive order would not guarantee that.
@@ -82,8 +98,9 @@ Restoring a backup goes through the same preview → apply path.
 - **HTTPS:** with "Force HTTPS" off, the host gets both `http://` and `https://` addresses, so there's no redirect.
 - **DNS challenge:** uses `dns cloudflare {env.CF_API_TOKEN}`. The token is passed as an environment variable to the Caddy process
   (changing it restarts Caddy), so it never appears in the Caddyfile or downloads.
+
 ## Security decisions
- 
+
 - **Login:**
   - There's one password, from `ADMIN_PASSWORD` (8+ characters; the app refuses to start otherwise). It's compared in constant time.
   - Failed logins are slowed and serialized (1 s).
@@ -102,8 +119,9 @@ Restoring a backup goes through the same preview → apply path.
 - **Files and IDs:** files in `data/` are written `0600`. Backup IDs and host IDs are format-checked to block path traversal.
 - **Admin UI over the network:** it's plain HTTP on 8080. For HTTPS, proxy it through Caddy itself (`admin.example.com → localhost:8080`)
   behind an access list. Compose comments show how to bind it to localhost only.
+
 ## Data (`DATA_DIR`, `/data` in Docker)
- 
+
 | File | Contents |
 | --- | --- |
 | `state.json` | Hosts and access lists. Password hashes only, never plaintext |
@@ -115,9 +133,9 @@ Restoring a backup goes through the same preview → apply path.
 | `backups/` | Last 30 snapshots |
 | `certs/<hostid>.crt/.key` | Uploaded certificates |
 | `caddy/` | Caddy's own storage: certificates, ACME accounts, local CA. Follows `XDG_DATA_HOME` |
- 
+
 ## AI assistant
- 
+
 - **Providers:**
   - `anthropic` posts to `/v1/messages`.
   - `openai`, `compat` and `ollama` all post to OpenAI-style `/chat/completions`.
@@ -129,16 +147,18 @@ Restoring a backup goes through the same preview → apply path.
     The server merges only allowed fields into a copy of the host (`buildProposal`). The UI opens it in the editor, and
     applying still needs Review. The AI can't set passwords and can't apply anything.
 - **Not implemented:** request limits, budgets and a log of AI requests. They were in the mockups and dropped to keep it simple.
+
 ## Testing
- 
+
 - **Unit tests:** `CADDY_BIN=$(which caddy) go test ./...`. Without `CADDY_BIN`, the real-Caddy test is skipped.
 - **During development, also checked by hand:**
   - Real requests through Caddy for every host type and option.
   - The full browser walkthrough with Playwright (Node) at 1366 px and 390 px wide.
   - The test helpers (fake upstreams, mock AI) were throwaway and aren't in the repo.
   - Worth adding a small Go integration test later, e.g. start the binary against a temp dir and drive `/api/*`.
+
 ## Known limitations
- 
+
 - **Stats and logs** read only the current `access.log` (up to 50 MiB, 300k entries in memory). Rolled files are ignored,
   so "7 days" may be partial on busy sites.
 - **Health checks** are TCP connects every 30 s, not HTTP requests.
@@ -147,17 +167,18 @@ Restoring a backup goes through the same preview → apply path.
 - **No TCP/UDP streams:** they would need the `caddy-l4` plugin.
 - **IPv6** works in rules and upstreams, but AI masking only covers IPv4.
 - **Single user only.**
+
 ## Backlog
- 
+
 - AI that reacts to live behaviour and proposes changes (opt-in, with review or auto-revert); see the README.
 - Read rolled access logs for longer ranges.
 - More DNS providers.
 - HTTP health checks (status code and path).
 - A Go integration test suite.
+
 ## Conventions
- 
+
 - Keep the backend on the standard library.
 - Keep the frontend build-free. `app.js` uses event delegation via `data-a` (actions) and `data-f`/`data-lf`/`data-sf` (field bindings).
 - Every config change goes through preview → apply. Don't add endpoints that write the Caddyfile any other way.
 - Validate anything that reaches the Caddyfile in `state.go`.
- 

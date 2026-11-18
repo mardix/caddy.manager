@@ -50,6 +50,7 @@ type pendingChange struct {
 	Caddyfile string
 	Label     string
 	Created   time.Time
+	SetEmail  string // ACME email picked up from an imported Caddyfile
 }
 
 func env(k, d string) string {
@@ -260,6 +261,7 @@ func (a *App) routes(mux *http.ServeMux) {
 	api("POST /api/render", a.render)
 	api("POST /api/preview", a.preview)
 	api("POST /api/apply", a.apply)
+	api("POST /api/import", a.analyzeImport)
 	api("GET /api/caddyfile", a.downloadCaddyfile)
 	api("GET /api/backups", a.listBackups)
 	api("POST /api/backups/restore", a.restoreBackup)
@@ -286,7 +288,19 @@ func (a *App) routes(mux *http.ServeMux) {
 func (a *App) getState(w http.ResponseWriter, r *http.Request) {
 	st, set := a.snapshot()
 	b, _ := os.ReadFile(a.caddy.caddyfilePath())
-	jok(w, map[string]any{"state": publicState(st), "caddyfile": string(b), "email": set.Email})
+	kept := []string{}
+	if nodes, err := parseCaddyfile(st.ExtraConfig); err == nil {
+		for _, n := range nodes {
+			if len(n.toks) > 0 && !strings.HasPrefix(n.name(), "(") {
+				parts := []string{}
+				for _, t := range n.toks {
+					parts = append(parts, t.text)
+				}
+				kept = append(kept, strings.Join(parts, " "))
+			}
+		}
+	}
+	jok(w, map[string]any{"state": publicState(st), "caddyfile": string(b), "email": set.Email, "keptSites": kept})
 }
 
 func (a *App) render(w http.ResponseWriter, r *http.Request) {
@@ -457,7 +471,13 @@ func (a *App) preview(w http.ResponseWriter, r *http.Request) {
 		AccessLists *[]AccessList `json:"accessLists"`
 		Caddyfile   *string       `json:"caddyfile"` // manual upload
 		Managed     bool          `json:"managed"`   // switch back from manual mode
-		Label       string        `json:"label"`
+		GlobalExtra *string       `json:"globalExtra"`
+		ExtraConfig *string       `json:"extraConfig"`
+		Import      *struct {
+			Caddyfile        string `json:"caddyfile"`
+			RewriteLocalhost bool   `json:"rewriteLocalhost"`
+		} `json:"import"`
+		Label string `json:"label"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		jerr(w, 400, "bad request")
@@ -468,7 +488,57 @@ func (a *App) preview(w http.ResponseWriter, r *http.Request) {
 	}
 	cur, set := a.snapshot()
 	next := cur
-	if req.Caddyfile != nil {
+	setEmail := ""
+	if req.Import != nil {
+		res, err := importCaddyfile(req.Import.Caddyfile)
+		if err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+		hosts := []Host{}
+		taken := map[string]bool{}
+		for i := range res.Hosts {
+			h := &res.Hosts[i]
+			if req.Import.RewriteLocalhost {
+				for j := range h.Upstreams {
+					h.Upstreams[j] = rewriteLocal(h.Upstreams[j])
+				}
+				for j := range h.Paths {
+					h.Paths[j].To = rewriteLocal(h.Paths[j].To)
+				}
+			}
+			for _, d := range h.Domains {
+				taken[d] = true
+			}
+			hosts = append(hosts, *h)
+		}
+		// keep existing hosts unless the import brings the same domain
+		for _, h := range cur.Hosts {
+			clash := false
+			for _, d := range h.Domains {
+				clash = clash || taken[d]
+			}
+			if !clash {
+				hosts = append(hosts, h)
+			}
+		}
+		next.Hosts = hosts
+		next.GlobalExtra = res.GlobalExtra
+		next.ExtraConfig = res.ExtraConfig
+		if req.Import.RewriteLocalhost {
+			next.ExtraConfig = rewriteLocalInConfig(next.ExtraConfig)
+		}
+		next.Manual, next.ManualCaddyfile = false, ""
+		if res.Email != "" && set.Email == "" {
+			setEmail = res.Email
+			set.Email = res.Email
+		}
+		mergeHashes(&next, cur)
+		if err := validateState(&next); err != nil {
+			jerr(w, 400, err.Error())
+			return
+		}
+	} else if req.Caddyfile != nil {
 		next.Manual = true
 		next.ManualCaddyfile = *req.Caddyfile
 		if strings.TrimSpace(next.ManualCaddyfile) == "" {
@@ -481,6 +551,12 @@ func (a *App) preview(w http.ResponseWriter, r *http.Request) {
 		}
 		if req.AccessLists != nil {
 			next.AccessLists = *req.AccessLists
+		}
+		if req.GlobalExtra != nil {
+			next.GlobalExtra = *req.GlobalExtra
+		}
+		if req.ExtraConfig != nil {
+			next.ExtraConfig = *req.ExtraConfig
 		}
 		if req.Hosts != nil || req.AccessLists != nil || req.Managed {
 			next.Manual = false
@@ -520,11 +596,28 @@ func (a *App) preview(w http.ResponseWriter, r *http.Request) {
 				delete(a.pending, k)
 			}
 		}
-		a.pending[token] = pendingChange{State: next, Caddyfile: text, Label: req.Label, Created: time.Now()}
+		a.pending[token] = pendingChange{State: next, Caddyfile: text, Label: req.Label, Created: time.Now(), SetEmail: setEmail}
 		a.pmu.Unlock()
 		resp["token"] = token
 	}
 	jok(w, resp)
+}
+
+func (a *App) analyzeImport(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Caddyfile string `json:"caddyfile"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		jerr(w, 400, "bad request")
+		return
+	}
+	res, err := importCaddyfile(req.Caddyfile)
+	if err != nil {
+		jerr(w, 400, err.Error())
+		return
+	}
+	_, inDocker := os.Stat("/.dockerenv")
+	jok(w, map[string]any{"result": res, "inDocker": inDocker == nil})
 }
 
 func (a *App) apply(w http.ResponseWriter, r *http.Request) {
@@ -543,6 +636,15 @@ func (a *App) apply(w http.ResponseWriter, r *http.Request) {
 	if err := a.applyChange(p.State, p.Caddyfile, p.Label); err != nil {
 		jerr(w, 500, err.Error())
 		return
+	}
+	if p.SetEmail != "" {
+		a.store.mu.Lock()
+		s := a.store.settings
+		if s.Email == "" {
+			s.Email = p.SetEmail
+			a.store.saveSettings(s)
+		}
+		a.store.mu.Unlock()
 	}
 	go a.mon.CheckAll(p.State)
 	jok(w, map[string]bool{"ok": true})
