@@ -358,24 +358,37 @@ async function runAsk(q) {
 }
 
 // AI panel for logs (host or all)
-function aiPanel(key, hostId, range) {
-  if (!aiOn()) return `<div class="aibox"><div class="hd">${I.sparkle}<h2>Ask about ${hostId ? 'this log' : 'your logs'}</h2></div><div class="bd"><p class="hint">Turn on the AI assistant in <a href="#/settings">Settings</a> to ask questions about traffic and errors.</p></div></div>`;
+function aiPanel(key, hostId, range, float) {
+  if (!aiOn()) return `<div class="aibox${float ? ' float' : ''}"><div class="hd">${I.sparkle}<h2>Ask about ${hostId ? 'this log' : 'your logs'}</h2></div><div class="bd"><p class="hint">Turn on the AI assistant in <a href="#/settings">Settings</a> to ask questions about traffic and errors.</p></div></div>`;
   const th = (P.data['thread:' + key] = P.data['thread:' + key] || []);
   const sugg = hostId ? ['What errors happened and why?', 'Who is hitting this site the most?', 'Is anything slow?', 'Any signs of attacks?'] : ['What happened in this period?', 'Which IPs look like attacks?', 'Which host has the most errors?', 'Which host uses the most bandwidth?'];
   const asked = new Set(th.map((m) => m.q));
-  return `<div class="aibox"><div class="hd">${I.sparkle}<h2>Ask about ${hostId ? 'this log' : 'your logs'}</h2><span style="font-size:12px">${{ '1h': 'Last hour', '24h': 'Last 24 hours', '7d': 'Last 7 days' }[range] || ''}</span></div>
-    <div class="bd">${th.map((m) => `<div class="q">${esc(m.q)}</div>${m.loading ? '<div class="ans"><span class="spin"></span></div>' : m.error ? `<div class="note bad">${esc(m.error)}</div>` : `<div class="ans">${mdLite(m.a)}<span class="basis">${esc(m.basis)}${S.settings.ai.maskIps ? ' · IPs masked' : ''}</span></div>`}`).join('')}
-    <div class="chips">${sugg.filter((s) => !asked.has(s)).map((s) => `<button class="sug" data-a="ai-sug" data-k="${key}" data-h="${esc(hostId || '')}" data-r="${range}">${esc(s)}</button>`).join('')}</div>
-    <form class="line" data-aiform="${key}" data-h="${esc(hostId || '')}" data-r="${range}"><label class="sr" for="aiq-${key}">Question</label><input id="aiq-${key}" class="in" placeholder="Ask about traffic, errors, clients…" style="border-color:var(--ai-line)"><button class="btn ai" type="submit">Ask</button></form>
+  const left = sugg.filter((x) => !asked.has(x));
+  const busy = th.some((m) => m.loading);
+  return `<div class="aibox${float ? ' float' : ''}"><div class="hd">${I.sparkle}<h2>Ask about ${hostId ? 'this log' : 'your logs'}</h2><span style="font-size:12px;white-space:nowrap">${{ '1h': 'Last hour', '24h': 'Last 24 hours', '7d': 'Last 7 days' }[range] || ''}</span>${th.length ? `<button class="btn sm ghost" data-a="ai-clear" data-k="${key}" style="color:var(--ai-ink);min-height:30px;padding:0 8px">Clear</button>` : ''}</div>
+    <div class="thread" data-thread="${key}">${th.length ? th.map((m) => `<div class="q">${esc(m.q)}</div>${m.loading ? '<div class="ans"><span class="spin"></span> <span class="muted">Reading the log…</span></div>' : m.error ? `<div class="note bad">${esc(m.error)}</div>` : `<div class="ans">${mdLite(m.a)}<span class="basis">${esc(m.basis)}${S.settings.ai.maskIps ? ' · IPs masked' : ''}</span></div>`}`).join('') : `<p class="hint" style="margin:0">Ask anything about ${hostId ? 'this host’s' : 'your'} traffic, or open a log line and choose <b>Ask AI about this request</b>.</p>`}</div>
+    <div class="ft">${left.length && !th.length ? `<div class="chips">${left.map((x) => `<button class="sug" data-a="ai-sug" data-k="${key}" data-h="${esc(hostId || '')}" data-r="${range}" ${busy ? 'disabled' : ''}>${esc(x)}</button>`).join('')}</div>` : ''}
+    <form class="line" data-aiform="${key}" data-h="${esc(hostId || '')}" data-r="${range}"><label class="sr" for="aiq-${key}">Question</label><input id="aiq-${key}" class="in" placeholder="Ask about traffic, errors, clients…" style="border-color:var(--ai-line)"><button class="btn ai" type="submit" ${busy ? 'disabled' : ''}>Ask</button></form>
     <p class="hint">Uses only ${hostId ? 'this host’s' : 'the filtered'} log for the selected range. Password hashes are never sent${S.settings.ai.maskIps ? '; IPs are masked' : ''}.</p></div></div>`;
 }
+// redraw only the AI panel (keeps the log table, open rows and scroll as they are)
+function renderAI(stick) {
+  const el = document.getElementById('lp-ai'), a = P.data.aiArgs;
+  if (!el || !a) { rerender(); return; }
+  const typed = el.querySelector('[data-aiform] input'); const keep = typed && document.activeElement === typed ? typed.value : null;
+  el.innerHTML = aiPanel(...a);
+  if (keep !== null) { const i = el.querySelector('[data-aiform] input'); i.value = keep; i.focus(); }
+  if (stick) scrollThread();
+}
+function scrollThread() { document.querySelectorAll('.aibox .thread').forEach((t) => { t.scrollTop = t.scrollHeight; }); }
 async function askLogs(key, hostId, range, q) {
   q = (q || '').trim(); if (!q) return;
   const th = P.data['thread:' + key] = P.data['thread:' + key] || [];
-  const m = { q, loading: true }; th.push(m); rerender();
+  if (th.some((m) => m.loading)) return;
+  const m = { q, loading: true }; th.push(m); renderAI(true);
   try { const r = await post('/api/ai', { mode: 'logs', hostId, range, question: q }); m.a = r.text; m.basis = r.basis; }
   catch (e) { m.error = e.message; }
-  m.loading = false; rerender();
+  m.loading = false; renderAI(true);
 }
 
 // ---------- pages: overview ----------
@@ -681,6 +694,8 @@ function logPage(h) {
   const stats = need('stats', () => api('/api/stats?' + qs));
   const logs = need('logs', () => api(`/api/logs?${qs}&status=${d.status}&q=${encodeURIComponent(d.q)}&limit=400`));
   d.aiKey = h ? 'host-' + h.id : 'all-' + (hid || 'x');
+  d.aiArgs = [d.aiKey, h ? h.id : hid, d.range, !!h];
+  onAfter(scrollThread);
   if (d.live && !pollTimer) pollTimer = setInterval(() => { if ($modal.innerHTML || document.hidden) return; refreshLogData(false); }, 5000);
   if (!d.live && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   const s = h ? hs(h.id) : null;
@@ -703,11 +718,11 @@ function logPage(h) {
     return shell('hosts', `<div class="between"><div style="flex:1 1 400px;min-width:0"><a href="#/hosts" class="muted" style="text-decoration:none;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:4px">${I.back}All hosts</a>
       <h1>${esc(hostName(h))}</h1><p class="lead">Requests to this host: traffic, errors and response times, with an assistant to help you read them.</p><div class="between muted" style="font-size:13px;margin-top:4px"><span class="pill-status"><span class="dot ${cls}"></span>${lbl}</span><span class="mono">${destLabel(h)}</span></div></div>
       <div class="seg"><a class="on" href="#/host/${h.id}">Log</a><a href="#/host/${h.id}/edit">Settings</a></div>${ranges}</div>
-      <div id="lp-tiles">${statTilesHTML(stats)}</div><div class="row"><div class="grow stack"><div id="lp-chart">${lpChart(stats)}</div>${logTable}</div><aside class="side" id="lp-ai" style="max-width:460px">${aiPanel(d.aiKey, h.id, d.range)}</aside></div>`);
+      <div id="lp-tiles">${statTilesHTML(stats)}</div><div class="row"><div class="grow stack"><div id="lp-chart">${lpChart(stats)}</div>${logTable}</div><aside class="side" id="lp-ai" style="max-width:460px;align-self:stretch">${aiPanel(...d.aiArgs)}</aside></div>`);
   }
   return shell('logs', `<div class="between"><div class="fill"><h1>Logs &amp; stats</h1><p class="lead">Traffic and requests across all your hosts. Filter by host, status or time, and ask questions about what happened.</p></div><label class="sr" for="lhost">Host</label><select id="lhost" class="in" style="max-width:260px"><option value="">All hosts</option>${S.state.hosts.map((x) => `<option value="${x.id}" ${hid === x.id ? 'selected' : ''}>${esc(hostName(x))}</option>`).join('')}</select>${ranges}</div>
     <div id="lp-tiles">${statTilesHTML(stats)}</div><div class="row"><div class="grow stack" id="lp-chart">${lpChart(stats)}</div><div class="side" id="lp-codes">${lpCodes(stats)}</div></div>
-    <div id="lp-ai">${aiPanel(d.aiKey, hid, d.range)}</div><div id="lp-per">${lpPer(stats)}</div>${logTable}`);
+    <div id="lp-ai">${aiPanel(...d.aiArgs)}</div><div id="lp-per">${lpPer(stats)}</div>${logTable}`);
 }
 
 // ---------- pages: access lists ----------
@@ -942,12 +957,13 @@ const ACT = {
   lask: (el) => {
     const l = P.data.logs.lines[+el.dataset.i];
     askLogs(P.data.aiKey, P.data.hostSel, P.data.range, 'Explain this request — what happened and is anything wrong?\n' + lineText(l));
-    setTimeout(() => { const a = document.getElementById('lp-ai'); if (a) a.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+    setTimeout(() => { const a = document.getElementById('lp-ai'); if (a && !a.querySelector('.aibox.float')) a.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
   },
   lcopy: async (el) => { const l = P.data.logs.lines[+el.dataset.i]; try { await navigator.clipboard.writeText(lineText(l)); toast('Copied'); } catch (e) { toast('Copy failed — your browser blocked clipboard access', true); } },
   lip: (el) => { const l = P.data.logs.lines[+el.dataset.i]; P.data.q = l.ip; const qi = document.getElementById('lq'); if (qi) qi.value = l.ip; refreshLogData(false); },
   llive: (el) => { P.data.live = el.checked; rerender(); },
   'ai-sug': (el) => askLogs(el.dataset.k, el.dataset.h, el.dataset.r, el.textContent),
+  'ai-clear': (el) => { P.data['thread:' + el.dataset.k] = []; renderAI(false); },
   // access lists
   'list-sel': (el) => { P.data.sel = +el.dataset.i; rerender(); },
   'list-new': () => { P.data.lists.push({ id: rid(), name: 'New list', users: [], rules: [], satisfy: 'any', pass: false }); P.data.sel = P.data.lists.length - 1; rerender(); },
