@@ -1234,7 +1234,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 func (a *App) testAI(w http.ResponseWriter, r *http.Request) {
 	_, s := a.snapshot()
 	t := time.Now()
-	out, err := callAI(s.AI, "Reply with the single word OK.", "ping", 16)
+	out, err := callAI(s.AI, "Reply with the single word OK.", "ping", 1024)
 	if err != nil {
 		jerr(w, 400, err.Error())
 		return

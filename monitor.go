@@ -198,6 +198,8 @@ type Entry struct {
 	Ms     int64  `json:"ms"`
 	Size   int64  `json:"size"`
 	Proto  string `json:"proto,omitempty"`
+	UA     string `json:"ua,omitempty"`
+	Ref    string `json:"ref,omitempty"`
 }
 
 type AccessLog struct {
@@ -242,12 +244,13 @@ func (a *AccessLog) refresh() {
 		var raw struct {
 			TS      float64 `json:"ts"`
 			Request struct {
-				Host     string `json:"host"`
-				Method   string `json:"method"`
-				URI      string `json:"uri"`
-				RemoteIP string `json:"remote_ip"`
-				ClientIP string `json:"client_ip"`
-				Proto    string `json:"proto"`
+				Host     string              `json:"host"`
+				Method   string              `json:"method"`
+				URI      string              `json:"uri"`
+				RemoteIP string              `json:"remote_ip"`
+				ClientIP string              `json:"client_ip"`
+				Proto    string              `json:"proto"`
+				Headers  map[string][]string `json:"headers"`
 			} `json:"request"`
 			Duration float64 `json:"duration"`
 			Size     int64   `json:"size"`
@@ -267,6 +270,7 @@ func (a *AccessLog) refresh() {
 		a.entries = append(a.entries, Entry{
 			TS: int64(raw.TS * 1000), Host: strings.ToLower(host), Method: raw.Request.Method, URI: raw.Request.URI,
 			IP: ip, Status: raw.Status, Ms: int64(raw.Duration * 1000), Size: raw.Size, Proto: raw.Request.Proto,
+			UA: clip(first(raw.Request.Headers["User-Agent"]), 300), Ref: clip(first(raw.Request.Headers["Referer"]), 300),
 		})
 	}
 	a.offset += read
@@ -295,4 +299,18 @@ func hostMatches(domains []string, host string) bool {
 		}
 	}
 	return false
+}
+
+func first(v []string) string {
+	if len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+
+func clip(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

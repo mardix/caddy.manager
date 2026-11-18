@@ -136,6 +136,9 @@ Restoring a backup goes through the same preview → apply path.
 
 ## AI assistant
 
+- **Token limit parameter:** `openai` sends `max_completion_tokens` (newer OpenAI models reject `max_tokens`); other OpenAI-style
+  providers send `max_tokens`. If the server rejects either one, the request is retried once with the other. Budgets are 4096 tokens
+  for answers and 1024 for the connection test, because reasoning models spend tokens before replying.
 - **Providers:**
   - `anthropic` posts to `/v1/messages`.
   - `openai`, `compat` and `ollama` all post to OpenAI-style `/chat/completions`.

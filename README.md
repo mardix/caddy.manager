@@ -82,8 +82,8 @@ Switch to **Caddyfile** to view, download or upload the file itself.
 ![Caddyfile view](docs/screenshots/caddyfile.png)
 
 ### Editing a host
-Pick **Proxy**, **Redirect** or **404 host**, then fill in the tabs. The panel on the right shows the
-host's Caddyfile block as you type.
+Opening a host shows its log first; **Settings** (or **Edit** in the host list) opens the editor. Pick **Proxy**, **Redirect**
+or **404 host**, then fill in the tabs. Expand **This host in the Caddyfile** on the right to see the generated block update as you type.
 
 ![Host details](docs/screenshots/editor-details.png)
 
@@ -109,7 +109,9 @@ Logins and IP rules defined once and reused on any host.
 ![Access lists](docs/screenshots/access-lists.png)
 
 ### Logs
-Every host has its own log page with stats, a filterable request log and the AI helper.
+Every host has its own log page with stats, a filterable request log and the AI helper. Click a line to expand it (full
+date, path, size, protocol, browser, referrer), or use **Expand all**. From an expanded line you can copy it, show only that
+client, or **Ask AI about this request**. The live view refreshes in place every 5 seconds.
 **Logs & stats** shows the same for all hosts together.
 
 ![Host log](docs/screenshots/host-log.png)

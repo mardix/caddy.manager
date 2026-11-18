@@ -262,7 +262,7 @@ Allowed fields in "changes": type ("proxy"|"redirect"|"dead"), domains (array), 
 		return
 	}
 	user = redact(user, set.AI.MaskIPs)
-	text, err := callAI(set.AI, system, user, 1200)
+	text, err := callAI(set.AI, system, user, 4096)
 	if err != nil {
 		jerr(w, 502, err.Error())
 		return

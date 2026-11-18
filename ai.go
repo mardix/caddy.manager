@@ -41,36 +41,29 @@ func callAI(s AISettings, system, user string, maxTokens int) (string, error) {
 	if base == "" {
 		return "", errors.New("set a base URL in Settings → AI assistant")
 	}
-	var req *http.Request
-	if s.Provider == "anthropic" {
-		if s.APIKey == "" {
-			return "", errors.New("add your Anthropic API key in Settings")
-		}
-		body, _ := json.Marshal(map[string]any{
-			"model": s.Model, "max_tokens": maxTokens, "system": system,
-			"messages": []map[string]string{{"role": "user", "content": user}},
-		})
-		req, _ = http.NewRequest("POST", base+"/v1/messages", bytes.NewReader(body))
-		req.Header.Set("x-api-key", s.APIKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	} else {
-		body, _ := json.Marshal(map[string]any{
-			"model": s.Model, "max_tokens": maxTokens,
-			"messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": user}},
-		})
-		req, _ = http.NewRequest("POST", base+"/chat/completions", bytes.NewReader(body))
-		if s.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+s.APIKey)
+	if s.Provider == "anthropic" && s.APIKey == "" {
+		return "", errors.New("add your Anthropic API key in Settings")
+	}
+	// OpenAI's newer models only accept max_completion_tokens; most other OpenAI-style servers want max_tokens.
+	tokenParam := "max_tokens"
+	if s.Provider == "openai" {
+		tokenParam = "max_completion_tokens"
+	}
+	b, status, err := sendAI(s, base, system, user, maxTokens, tokenParam)
+	if err == nil && status == 400 && s.Provider != "anthropic" {
+		msg := string(b)
+		if strings.Contains(msg, "max_tokens") || strings.Contains(msg, "max_completion_tokens") {
+			other := "max_completion_tokens"
+			if tokenParam == other {
+				other = "max_tokens"
+			}
+			b, status, err = sendAI(s, base, system, user, maxTokens, other)
 		}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := aiClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("couldn't reach the model provider: %v", err)
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode >= 300 {
+	if status >= 300 {
 		var e struct {
 			Error struct {
 				Message string `json:"message"`
@@ -84,8 +77,9 @@ func callAI(s AISettings, system, user string, maxTokens int) (string, error) {
 				msg = msg[:300]
 			}
 		}
-		return "", fmt.Errorf("provider returned %d: %s", resp.StatusCode, msg)
+		return "", fmt.Errorf("provider returned %d: %s", status, msg)
 	}
+	var text string
 	if s.Provider == "anthropic" {
 		var r struct {
 			Content []struct {
@@ -102,19 +96,58 @@ func callAI(s AISettings, system, user string, maxTokens int) (string, error) {
 				out = append(out, c.Text)
 			}
 		}
-		return strings.Join(out, "\n"), nil
+		text = strings.Join(out, "\n")
+	} else {
+		var r struct {
+			Choices []struct {
+				Message struct {
+					Content string `json:"content"`
+				} `json:"message"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(b, &r); err != nil || len(r.Choices) == 0 {
+			return "", errors.New("unexpected reply from provider")
+		}
+		text = r.Choices[0].Message.Content
+		if strings.TrimSpace(text) == "" && r.Choices[0].FinishReason == "length" {
+			return "", errors.New("the model used its whole token budget thinking and returned no text; try a non-reasoning model")
+		}
 	}
-	var r struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
+	if strings.TrimSpace(text) == "" {
+		return "", errors.New("the model returned an empty reply")
 	}
-	if err := json.Unmarshal(b, &r); err != nil || len(r.Choices) == 0 {
-		return "", errors.New("unexpected reply from provider")
+	return text, nil
+}
+
+func sendAI(s AISettings, base, system, user string, maxTokens int, tokenParam string) ([]byte, int, error) {
+	var req *http.Request
+	if s.Provider == "anthropic" {
+		body, _ := json.Marshal(map[string]any{
+			"model": s.Model, "max_tokens": maxTokens, "system": system,
+			"messages": []map[string]string{{"role": "user", "content": user}},
+		})
+		req, _ = http.NewRequest("POST", base+"/v1/messages", bytes.NewReader(body))
+		req.Header.Set("x-api-key", s.APIKey)
+		req.Header.Set("anthropic-version", "2023-06-01")
+	} else {
+		body, _ := json.Marshal(map[string]any{
+			"model": s.Model, tokenParam: maxTokens,
+			"messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": user}},
+		})
+		req, _ = http.NewRequest("POST", base+"/chat/completions", bytes.NewReader(body))
+		if s.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+s.APIKey)
+		}
 	}
-	return r.Choices[0].Message.Content, nil
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := aiClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	return b, resp.StatusCode, nil
 }
 
 var reIPv4 = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)

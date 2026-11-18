@@ -99,8 +99,8 @@ function rerender() {
   let html;
   if (!p.length || p[0] === 'overview') html = pageOverview();
   else if (p[0] === 'hosts') html = pageHosts();
-  else if (p[0] === 'host' && p[2] === 'log') html = pageHostLog(p[1]);
-  else if (p[0] === 'host') html = pageEditor(p[1]);
+  else if (p[0] === 'host' && (p[1] === 'new' || p[2] === 'edit')) html = pageEditor(p[1]);
+  else if (p[0] === 'host') html = pageHostLog(p[1]);
   else if (p[0] === 'access') html = pageAccess();
   else if (p[0] === 'certs') html = pageCerts();
   else if (p[0] === 'logs') html = pageLogs();
@@ -393,8 +393,8 @@ function pageOverview() {
     const s = hs(h.id);
     if (h.type === 'proxy' && s.health === 'down') att.push({ k: 'bad', t: `${hostName(h)} is down`, d: `${h.upstreams.join(', ')} isn't answering${s.error ? ' — ' + s.error : ''}`, act: `<a class="btn sm" href="#/host/${h.id}">Open host</a>`, ex: `Upstream for ${hostName(h)} (${h.upstreams.join(', ')}) is not reachable: ${s.error || 'connection failed'}`, hid: h.id });
     if (h.type === 'proxy' && s.health === 'slow') att.push({ k: 'warn', t: `${hostName(h)} is slow`, d: `Upstream took ${s.ms} ms to accept a connection`, act: `<a class="btn sm" href="#/host/${h.id}/log">View log</a>` });
-    if (s.cert === 'failed') att.push({ k: 'bad', t: `Certificate problem on ${hostName(h)}`, d: s.certError || 'Caddy could not get a certificate', act: `<button class="btn sm" data-a="cert-retry" data-h="${h.id}">Retry now</button><a class="btn sm" href="#/host/${h.id}">Open host</a>`, ex: s.certError || 'Certificate could not be obtained for ' + hostName(h), hid: h.id });
-    if (s.cert === 'expiring') att.push({ k: 'warn', t: `Certificate for ${hostName(h)} expires in ${s.certDays} days`, d: 'Caddy renews certificates well before they expire, so renewal may be failing.', act: `<button class="btn sm" data-a="cert-retry" data-h="${h.id}">Retry now</button><a class="btn sm" href="#/host/${h.id}">Open host</a>`, ex: `Certificate for ${hostName(h)} expires in ${s.certDays} days and has not been renewed`, hid: h.id });
+    if (s.cert === 'failed') att.push({ k: 'bad', t: `Certificate problem on ${hostName(h)}`, d: s.certError || 'Caddy could not get a certificate', act: `<button class="btn sm" data-a="cert-retry" data-h="${h.id}">Retry now</button><a class="btn sm" href="#/host/${h.id}/edit">Edit host</a>`, ex: s.certError || 'Certificate could not be obtained for ' + hostName(h), hid: h.id });
+    if (s.cert === 'expiring') att.push({ k: 'warn', t: `Certificate for ${hostName(h)} expires in ${s.certDays} days`, d: 'Caddy renews certificates well before they expire, so renewal may be failing.', act: `<button class="btn sm" data-a="cert-retry" data-h="${h.id}">Retry now</button><a class="btn sm" href="#/host/${h.id}/edit">Edit host</a>`, ex: `Certificate for ${hostName(h)} expires in ${s.certDays} days and has not been renewed`, hid: h.id });
   }
   const attHTML = att.length ? att.map((a, i) => `<div class="att ${a.k}"><span class="dot ${a.k === 'bad' ? 'down' : 'slow'}"></span><div style="flex:1 1 260px;min-width:0"><div class="t">${esc(a.t)}</div><div class="d">${esc(a.d)}</div></div>${a.act}${a.ex && aiOn() ? `<button class="btn sm ai" data-a="explain" data-err="${esc(a.ex)}" data-h="${a.hid || ''}">${I.sparkle}Explain</button>` : ''}</div>`).join('')
     : '<div class="att info"><span class="dot up"></span><div class="t">All good — nothing needs your attention.</div></div>';
@@ -480,7 +480,7 @@ function hostRows() {
       <td style="font-size:13px;color:var(--soft)">${accessLabel(h)}</td>
       <td><span class="pill-status" style="color:var(--soft);white-space:nowrap"><span class="dot ${cls}"></span>${lbl}</span></td>
       <td><label class="chk" style="padding:0;align-items:center"><span class="sr">Enable ${esc(hostName(h))}</span><input type="checkbox" ${h.enabled ? 'checked' : ''} data-a="toggle-host" data-id="${h.id}"></label></td>
-      <td style="text-align:right;white-space:nowrap"><a class="btn sm ghost" href="#/host/${h.id}/log">Log</a><a class="btn sm ghost" href="#/host/${h.id}" style="color:var(--accent)">Edit</a></td></tr>`; }).join('');
+      <td style="text-align:right;white-space:nowrap"><a class="btn sm ghost" href="#/host/${h.id}/edit" style="color:var(--accent)">Edit</a></td></tr>`; }).join('');
 }
 
 // ---------- pages: editor ----------
@@ -579,6 +579,7 @@ function pageEditor(id) {
   const s = hs(e.id); const [cls, lbl] = healthLabel(e, s);
   onAfter(() => {
     renderSnippet();
+    const sb = document.getElementById('snipBox'); if (sb) sb.ontoggle = () => { P.data.snipOpen = sb.open; };
     const cf = document.getElementById('certForm');
     if (cf) cf.onsubmit = async (ev) => { ev.preventDefault(); try { await api('/api/certs/' + e.id, { method: 'POST', form: new FormData(cf) }); toast('Certificate files uploaded'); } catch (err) { toast(err.message, true); } };
     const f = $app.querySelector('[autofocus]'); if (f && P.data.isNew && !P.data.focused) { f.focus(); P.data.focused = true; }
@@ -586,16 +587,16 @@ function pageEditor(id) {
   return shell('hosts', `
     <div class="between"><div style="flex:1 1 400px;min-width:0"><a href="#/hosts" class="between muted" style="text-decoration:none;font-size:13px;font-weight:600;gap:4px;display:inline-flex">${I.back}All hosts</a>
       <h1>${P.data.isNew ? 'New host' : esc(hostName(e))}</h1><p class="lead">Choose what this host does, then set its domains, routing, access and HTTPS. Nothing changes until you review and apply.</p>${P.data.fromAI ? '<p class="note ai" style="margin-top:8px">Filled in by the assistant — check it, then review &amp; apply.</p>' : ''}</div>
-      ${!P.data.isNew ? `<div class="seg"><a class="on" href="#/host/${e.id}">Settings</a><a href="#/host/${e.id}/log">Log</a></div>` : ''}
+      ${!P.data.isNew ? `<div class="seg"><a href="#/host/${e.id}">Log</a><a class="on" href="#/host/${e.id}/edit">Settings</a></div>` : ''}
       <label class="chk" style="padding:0 14px;background:var(--card);border-radius:12px;align-items:center"><input type="checkbox" data-f="enabled" ${e.enabled ? 'checked' : ''}>Enabled</label>
       <button class="btn primary" data-a="save-host">Review &amp; apply</button></div>
     <section class="choice" aria-label="Host type" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">${types.map(([k, l, d]) => `<button type="button" class="${e.type === k ? 'on' : ''}" data-a="htype" data-k="${k}" aria-pressed="${e.type === k}" style="display:flex;gap:12px;align-items:flex-start;background:${e.type === k ? 'var(--card)' : 'transparent'}">${typeIco(k)}<span style="margin:0"><b>${l}</b><span>${d}</span></span></button>`).join('')}</section>
     <div class="row"><main class="grow card flush"><div class="tabs" role="tablist">${tabs.map(([k, l, n]) => `<button role="tab" class="${tab === k ? 'on' : ''}" aria-selected="${tab === k}" data-a="tab" data-k="${k}">${l}${n ? `<span class="tag t-muted">${n}</span>` : ''}</button>`).join('')}</div>
       <div class="stack" style="padding:22px">${panel}</div></main>
       <aside class="side stack">
-        <section class="code" aria-label="Caddyfile preview" style="padding:0"><div class="between" style="padding:16px 18px 0;color:#D6D3D1;font-family:Inter,sans-serif;font-size:13px;font-weight:600"><span class="fill">This host in the Caddyfile</span><span style="font-weight:400;color:#A8A29E">live</span></div><pre id="snippet" style="margin:0;padding:12px 18px 18px;white-space:pre;overflow-x:auto;font:inherit">${esc(P.data.snip || '…')}</pre></section>
-        ${!P.data.isNew ? `<section class="card stack s8" style="font-size:13.5px"><div class="between"><span class="dot ${cls}"></span><span class="fill">Upstream check</span><b>${lbl}</b></div>${s.error ? `<div class="muted mono" style="font-size:12px">${esc(s.error)}</div>` : ''}<div class="between"><button class="btn sm" data-a="check-now">Check now</button><a href="#/host/${e.id}/log" style="font-size:13px;font-weight:600">Open this host’s log</a></div></section>
-        <button class="btn danger" data-a="delete-host" style="align-self:flex-start">Delete host</button>` : ''}
+        ${!P.data.isNew ? `<section class="card stack s8" style="font-size:13.5px"><div class="between"><span class="dot ${cls}"></span><span class="fill">Upstream check</span><b>${lbl}</b></div>${s.error ? `<div class="muted mono" style="font-size:12px">${esc(s.error)}</div>` : ''}<div class="between"><button class="btn sm" data-a="check-now">Check now</button><a href="#/host/${e.id}" style="font-size:13px;font-weight:600">Open this host’s log</a></div></section>` : ''}
+        <details class="code snipbox" id="snipBox" ${P.data.snipOpen ? 'open' : ''} style="padding:0"><summary><span class="chev" aria-hidden="true">▸</span><span class="fill">This host in the Caddyfile</span><span style="font-weight:400;color:#A8A29E">live</span></summary><pre id="snippet" style="margin:0;padding:4px 18px 18px;white-space:pre;overflow-x:auto;font:inherit">${esc(P.data.snip || '…')}</pre></details>
+        ${!P.data.isNew ? '<button class="btn danger" data-a="delete-host" style="align-self:flex-start">Delete host</button>' : ''}
       </aside></div>`);
 }
 function usersRulesEditor(a, prefix) {
@@ -614,44 +615,99 @@ function pageHostLog(id) {
   return logPage(h);
 }
 function pageLogs() { return logPage(null); }
+function logQS(d) { return `range=${d.range}&host=${encodeURIComponent(d.hostSel)}`; }
+const statusText = { 200: 'OK', 201: 'Created', 204: 'No content', 301: 'Moved permanently', 302: 'Redirect', 304: 'Not modified (cached)', 307: 'Temporary redirect', 308: 'Permanent redirect', 400: 'Bad request', 401: 'Login required', 403: 'Forbidden / blocked', 404: 'Not found', 405: 'Method not allowed', 408: 'Request timeout', 410: 'Gone', 413: 'Request too large', 429: 'Too many requests', 499: 'Client closed the connection', 500: 'Upstream error', 502: 'Upstream unreachable', 503: 'Unavailable (maintenance?)', 504: 'Upstream timed out' };
+const lineKey = (l) => l.ts + '|' + l.method + '|' + l.uri + '|' + l.ip;
+function lineText(l) { return `${new Date(l.ts).toISOString()} ${l.status} ${l.method} ${l.host}${l.uri} from ${l.ip} in ${l.ms} ms, ${l.size} bytes${l.proto ? ', ' + l.proto : ''}${l.ua ? ', UA: ' + l.ua : ''}${l.ref ? ', referrer: ' + l.ref : ''}`; }
+
+// fetch fresh stats/logs, then swap them in without blanking the page
+async function refreshLogData(full) {
+  const d = P.data, key = P.key, qs = logQS(d);
+  const tbl = document.getElementById('lp-tbody'); if (tbl) tbl.style.opacity = '.55';
+  try {
+    const [stats, logs] = await Promise.all([api('/api/stats?' + qs), api(`/api/logs?${qs}&status=${d.status}&q=${encodeURIComponent(d.q)}&limit=400`)]);
+    if (P.key !== key) return;
+    d.stats = stats; d.logs = logs;
+  } catch (e) { if (P.key !== key) return; d.logs = { error: e.message }; }
+  if (full || !document.getElementById('lp-tbody')) { rerender(); return; }
+  const h = d.pageHost ? S.state.hosts.find((x) => x.id === d.pageHost) : null;
+  const set = (id, html) => { const el = document.getElementById(id); if (el) el.innerHTML = html; };
+  set('lp-tiles', statTilesHTML(d.stats)); set('lp-chart', lpChart(d.stats)); set('lp-codes', lpCodes(d.stats)); set('lp-per', lpPer(d.stats)); set('lp-tbody', lpRows(d.logs, h));
+  const t2 = document.getElementById('lp-tbody'); if (t2) t2.style.opacity = '';
+  const tot = document.getElementById('lp-count'); if (tot) tot.textContent = lpCount(d.logs);
+}
+function lpChart(stats) { return stats && !stats.error ? `<section class="card"><div class="between" style="margin-bottom:12px"><h2 class="fill" style="font-size:15px;font-family:Inter,sans-serif">Requests</h2><span class="pill-status"><span class="dot" style="background:#FDBA74"></span>OK</span><span class="pill-status"><span class="dot down"></span>5xx</span></div>${bars(stats.buckets, 120)}${ticks(stats.from, stats.step, stats.buckets.length)}</section>` : ''; }
+function lpCodes(stats) { return stats && !stats.error ? `<section class="card stack s8"><h2>Responses</h2>${(() => { const t = Math.max(1, stats.total); const c = stats.codes; const col = { 2: '#22C55E', 3: '#60A5FA', 4: '#F59E0B', 5: '#DC2626' }; return `<div class="split">${[2, 3, 4, 5].map((k) => c[k] ? `<span style="width:${(c[k] / t) * 100}%;background:${col[k]}"></span>` : '').join('')}</div>` + [[2, 'OK'], [3, 'Redirect'], [4, 'Client error'], [5, 'Server error']].map(([k, l]) => `<div class="between" style="font-size:14px"><span class="dot" style="background:${col[k]};border-radius:3px"></span><span class="fill">${k}xx ${l}</span><b>${((c[k] / t) * 100).toFixed(1)}%</b></div>`).join(''); })()}</section>` : ''; }
+function lpPer(stats) { return stats && !stats.error ? `<section class="card flush"><h2 style="padding:16px 20px">By host</h2><div class="tbl-wrap"><table style="min-width:560px"><thead><tr><th>Host</th><th style="text-align:right">Requests</th><th style="text-align:right">5xx</th><th style="text-align:right">Avg response</th><th style="text-align:right">Data</th></tr></thead><tbody>${stats.perHost.length ? stats.perHost.map((p) => `<tr class="hover"><td><a href="#/host/${p.id}/log" style="color:var(--ink);font-weight:600">${esc(p.domain)}</a></td><td class="mono" style="text-align:right">${fmtN(p.req)}</td><td class="mono" style="text-align:right;${p.err ? 'color:var(--bad-ink)' : ''}">${fmtN(p.err)}</td><td class="mono" style="text-align:right">${p.avgMs} ms</td><td class="mono" style="text-align:right">${fmtB(p.bytes)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No hosts yet.</td></tr>'}</tbody></table></div></section>` : ''; }
+function lpCount(logs) { return logs && logs.lines ? `${fmtN(logs.lines.length)} shown${logs.total > logs.lines.length ? ' of ' + fmtN(logs.total) : ''}` : ''; }
+function lpRows(logs, h) {
+  const d = P.data, cols = h ? 6 : 7;
+  if (!logs) return `<tr><td colspan="${cols}" class="empty" style="font-family:Inter,sans-serif">Loading…</td></tr>`;
+  if (logs.error) return `<tr><td colspan="${cols}" class="empty" style="font-family:Inter,sans-serif">${esc(logs.error)}</td></tr>`;
+  if (!logs.lines.length) return `<tr><td colspan="${cols}" class="empty" style="font-family:Inter,sans-serif">No requests ${d.status !== 'all' || d.q ? 'match these filters' : 'in this period yet'}.</td></tr>`;
+  d.open = d.open || {};
+  return logs.lines.map((l, i) => {
+    const k = lineKey(l), open = d.expandAll || d.open[k];
+    const row = `<tr class="hover lrow" data-a="lrow" data-i="${i}" aria-expanded="${!!open}" style="cursor:pointer">
+      <td style="width:22px;padding-right:0;color:var(--muted)"><span class="chev${open ? ' open' : ''}" aria-hidden="true">▸</span></td>
+      <td style="color:var(--muted);white-space:nowrap">${fmtTime(l.ts)}</td><td class="code${String(l.status)[0]}" style="font-weight:600">${l.status}</td>${h ? '' : `<td style="white-space:nowrap">${esc(l.host)}</td>`}
+      <td class="req">${esc(l.method)} ${esc(l.uri)}</td><td style="color:var(--muted);white-space:nowrap">${esc(l.ip)}</td><td style="text-align:right;color:var(--muted);white-space:nowrap">${l.ms} ms</td></tr>`;
+    if (!open) return row;
+    const f = (label, v, mono) => v ? `<div class="kv"><span>${label}</span><b class="${mono ? 'mono' : ''}">${v}</b></div>` : '';
+    return row + `<tr class="ldetail"><td colspan="${cols}"><div class="kvgrid">
+      ${f('Time', esc(new Date(l.ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'medium' })))}
+      ${f('Status', `<span class="code${String(l.status)[0]}">${l.status}</span> ${esc(statusText[l.status] || '')}`)}
+      ${f('Host', esc(l.host), true)}${f('Method', esc(l.method), true)}
+      ${f('Duration', l.ms + ' ms')}${f('Size', fmtB(l.size))}${f('Client IP', esc(l.ip), true)}${f('Protocol', esc(l.proto))}
+    </div>
+    <div class="kv wide"><span>Path</span><b class="mono">${esc(l.uri)}</b></div>
+    ${l.ua ? `<div class="kv wide"><span>Browser</span><b class="mono">${esc(l.ua)}</b></div>` : ''}
+    ${l.ref ? `<div class="kv wide"><span>Referrer</span><b class="mono">${esc(l.ref)}</b></div>` : ''}
+    <div class="line" style="margin-top:10px">
+      ${aiOn() ? `<button class="btn sm ai" data-a="lask" data-i="${i}">${I.sparkle}Ask AI about this request</button>` : ''}
+      <button class="btn sm" data-a="lcopy" data-i="${i}">Copy line</button>
+      <button class="btn sm ghost" data-a="lip" data-i="${i}">Only this client</button>
+    </div></td></tr>`;
+  }).join('');
+}
+
 function logPage(h) {
   const d = P.data;
   d.range = d.range || '24h'; d.status = d.status || 'all'; d.q = d.q || ''; d.hostSel = h ? h.id : (d.hostSel || '');
+  d.pageHost = h ? h.id : '';
   if (d.live === undefined) d.live = !!h;
   const hid = d.hostSel;
-  const qs = `range=${d.range}&host=${encodeURIComponent(hid)}`;
+  const qs = logQS(d);
   const stats = need('stats', () => api('/api/stats?' + qs));
   const logs = need('logs', () => api(`/api/logs?${qs}&status=${d.status}&q=${encodeURIComponent(d.q)}&limit=400`));
-  if (d.live && !pollTimer) pollTimer = setInterval(() => { const ae = document.activeElement; if ($modal.innerHTML || (ae && ['INPUT', 'TEXTAREA', 'SELECT'].includes(ae.tagName))) return; delete P.data.logs; delete P.data.stats; need('stats', () => api('/api/stats?' + `range=${P.data.range}&host=${encodeURIComponent(P.data.hostSel)}`)); need('logs', () => api(`/api/logs?range=${P.data.range}&host=${encodeURIComponent(P.data.hostSel)}&status=${P.data.status}&q=${encodeURIComponent(P.data.q)}&limit=400`)); }, 5000);
+  d.aiKey = h ? 'host-' + h.id : 'all-' + (hid || 'x');
+  if (d.live && !pollTimer) pollTimer = setInterval(() => { if ($modal.innerHTML || document.hidden) return; refreshLogData(false); }, 5000);
   if (!d.live && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   const s = h ? hs(h.id) : null;
   const ranges = `<div class="seg" role="group" aria-label="Range">${[['1h', '1 h'], ['24h', '24 h'], ['7d', '7 d']].map(([k, l]) => `<button class="${d.range === k ? 'on' : ''}" data-a="lrange" data-k="${k}">${l}</button>`).join('')}</div>`;
-  const statTiles = statTilesHTML(stats);
-  const chart = stats && !stats.error ? `<section class="card"><div class="between" style="margin-bottom:12px"><h2 class="fill" style="font-size:15px;font-family:Inter,sans-serif">Requests</h2><span class="pill-status"><span class="dot" style="background:#FDBA74"></span>OK</span><span class="pill-status"><span class="dot down"></span>5xx</span></div>${bars(stats.buckets, 120)}${ticks(stats.from, stats.step, stats.buckets.length)}</section>` : '';
-  const codes = stats && !stats.error && !h ? `<section class="card stack s8"><h2>Responses</h2>${(() => { const t = Math.max(1, stats.total); const c = stats.codes; const col = { 2: '#22C55E', 3: '#60A5FA', 4: '#F59E0B', 5: '#DC2626' }; return `<div class="split">${[2, 3, 4, 5].map((k) => c[k] ? `<span style="width:${(c[k] / t) * 100}%;background:${col[k]}"></span>` : '').join('')}</div>` + [[2, 'OK'], [3, 'Redirect'], [4, 'Client error'], [5, 'Server error']].map(([k, l]) => `<div class="between" style="font-size:14px"><span class="dot" style="background:${col[k]};border-radius:3px"></span><span class="fill">${k}xx ${l}</span><b>${((c[k] / t) * 100).toFixed(1)}%</b></div>`).join(''); })()}</section>` : '';
-  const perHost = stats && !stats.error && !h ? `<section class="card flush"><h2 style="padding:16px 20px">By host</h2><div class="tbl-wrap"><table style="min-width:560px"><thead><tr><th>Host</th><th style="text-align:right">Requests</th><th style="text-align:right">5xx</th><th style="text-align:right">Avg response</th><th style="text-align:right">Data</th></tr></thead><tbody>${stats.perHost.length ? stats.perHost.map((p) => `<tr class="hover"><td><a href="#/host/${p.id}/log" style="color:var(--ink);font-weight:600">${esc(p.domain)}</a></td><td class="mono" style="text-align:right">${fmtN(p.req)}</td><td class="mono" style="text-align:right;${p.err ? 'color:var(--bad-ink)' : ''}">${fmtN(p.err)}</td><td class="mono" style="text-align:right">${p.avgMs} ms</td><td class="mono" style="text-align:right">${fmtB(p.bytes)}</td></tr>`).join('') : '<tr><td colspan="5" class="empty">No hosts yet.</td></tr>'}</tbody></table></div></section>` : '';
-  const logTable = `<section class="card flush"><div class="between" style="padding:12px 16px;border-bottom:1px solid var(--line)"><h2 class="fill" style="font-size:16px">Requests</h2>
+  const logTable = `<section class="card flush"><div class="between" style="padding:12px 16px;border-bottom:1px solid var(--line)"><div class="fill"><h2 style="font-size:16px">Requests</h2><span id="lp-count" class="hint">${lpCount(logs)}</span></div>
       <div class="seg" role="group" aria-label="Status">${[['all', 'All'], ['2', '2xx'], ['3', '3xx'], ['4', '4xx'], ['5', '5xx']].map(([k, l]) => `<button class="${d.status === k ? 'on' : ''}" data-a="lstatus" data-k="${k}" style="min-height:34px;padding:0 10px;font-size:13px">${l}</button>`).join('')}</div>
       <label class="sr" for="lq">Filter by path or IP</label><input id="lq" class="in" type="search" value="${esc(d.q)}" placeholder="Path or IP" style="width:170px;height:40px">
+      <button class="btn sm" data-a="lexpand" aria-pressed="${!!d.expandAll}">${d.expandAll ? 'Collapse all' : 'Expand all'}</button>
       <label class="chk" style="padding:0;align-items:center;min-height:40px;font-weight:600;font-size:13px"><input type="checkbox" data-a="llive" ${d.live ? 'checked' : ''}>Live</label>
       <a class="btn sm ghost" style="color:var(--accent)" href="/api/logs?${qs}&status=${d.status}&q=${encodeURIComponent(d.q)}&limit=2000&download=1">Download</a></div>
-    <div class="tbl-wrap"><table class="logtbl" style="min-width:${h ? 620 : 760}px"><thead><tr><th>Time</th><th>Status</th>${h ? '' : '<th>Host</th>'}<th>Request</th><th>Client</th><th style="text-align:right">Time</th></tr></thead><tbody>${logs && !logs.error ? (logs.lines.length ? logs.lines.map((l) => `<tr class="hover"><td style="color:var(--muted);white-space:nowrap">${fmtTime(l.ts)}</td><td class="code${String(l.status)[0]}" style="font-weight:600">${l.status}</td>${h ? '' : `<td style="white-space:nowrap">${esc(l.host)}</td>`}<td style="word-break:break-all">${esc(l.method)} ${esc(l.uri)}</td><td style="color:var(--muted);white-space:nowrap">${esc(l.ip)}</td><td style="text-align:right;color:var(--muted);white-space:nowrap">${l.ms} ms</td></tr>`).join('') : `<tr><td colspan="6" class="empty" style="font-family:Inter,sans-serif">No requests ${d.status !== 'all' || d.q ? 'match these filters' : 'in this period yet'}.</td></tr>`) : `<tr><td colspan="6" class="empty" style="font-family:Inter,sans-serif">${logs && logs.error ? esc(logs.error) : 'Loading…'}</td></tr>`}</tbody></table></div></section>`;
+    <div class="tbl-wrap"><table class="logtbl" style="min-width:${h ? 640 : 780}px"><thead><tr><th style="width:22px"><span class="sr">Details</span></th><th>Time</th><th>Status</th>${h ? '' : '<th>Host</th>'}<th>Request</th><th>Client</th><th style="text-align:right">Duration</th></tr></thead><tbody id="lp-tbody">${lpRows(logs, h)}</tbody></table></div></section>`;
   onAfter(() => {
     const qi = document.getElementById('lq');
-    if (qi) qi.onchange = () => { P.data.q = qi.value; delete P.data.logs; rerender(); };
+    if (qi) qi.onchange = () => { P.data.q = qi.value; refreshLogData(false); };
     const hsel = document.getElementById('lhost');
-    if (hsel) hsel.onchange = () => { P.data.hostSel = hsel.value; delete P.data.logs; delete P.data.stats; rerender(); };
+    if (hsel) hsel.onchange = () => { P.data.hostSel = hsel.value; refreshLogData(true); };
   });
   if (h) {
     const [cls, lbl] = healthLabel(h, s);
     return shell('hosts', `<div class="between"><div style="flex:1 1 400px;min-width:0"><a href="#/hosts" class="muted" style="text-decoration:none;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:4px">${I.back}All hosts</a>
       <h1>${esc(hostName(h))}</h1><p class="lead">Requests to this host: traffic, errors and response times, with an assistant to help you read them.</p><div class="between muted" style="font-size:13px;margin-top:4px"><span class="pill-status"><span class="dot ${cls}"></span>${lbl}</span><span class="mono">${destLabel(h)}</span></div></div>
-      <div class="seg"><a href="#/host/${h.id}">Settings</a><a class="on" href="#/host/${h.id}/log">Log</a></div>${ranges}</div>
-      ${statTiles}<div class="row"><div class="grow stack">${chart}${logTable}</div><aside class="side" style="max-width:460px">${aiPanel('host-' + h.id, h.id, d.range)}</aside></div>`);
+      <div class="seg"><a class="on" href="#/host/${h.id}">Log</a><a href="#/host/${h.id}/edit">Settings</a></div>${ranges}</div>
+      <div id="lp-tiles">${statTilesHTML(stats)}</div><div class="row"><div class="grow stack"><div id="lp-chart">${lpChart(stats)}</div>${logTable}</div><aside class="side" id="lp-ai" style="max-width:460px">${aiPanel(d.aiKey, h.id, d.range)}</aside></div>`);
   }
   return shell('logs', `<div class="between"><div class="fill"><h1>Logs &amp; stats</h1><p class="lead">Traffic and requests across all your hosts. Filter by host, status or time, and ask questions about what happened.</p></div><label class="sr" for="lhost">Host</label><select id="lhost" class="in" style="max-width:260px"><option value="">All hosts</option>${S.state.hosts.map((x) => `<option value="${x.id}" ${hid === x.id ? 'selected' : ''}>${esc(hostName(x))}</option>`).join('')}</select>${ranges}</div>
-    ${statTiles}<div class="row"><div class="grow stack">${chart}</div><div class="side">${codes}</div></div>
-    ${aiPanel('all-' + (hid || 'x'), hid, d.range)}${perHost}${logTable}`);
+    <div id="lp-tiles">${statTilesHTML(stats)}</div><div class="row"><div class="grow stack" id="lp-chart">${lpChart(stats)}</div><div class="side" id="lp-codes">${lpCodes(stats)}</div></div>
+    <div id="lp-ai">${aiPanel(d.aiKey, hid, d.range)}</div><div id="lp-per">${lpPer(stats)}</div>${logTable}`);
 }
 
 // ---------- pages: access lists ----------
@@ -670,7 +726,7 @@ function pageAccess() {
       ${usersRulesEditor(cur, '').replace(/data-f="/g, 'data-lf="')}
       <label class="chk"><input type="checkbox" data-lf="pass" ${cur.pass ? 'checked' : ''}><span>Pass the login on to the upstream<small>Sends the username as X-Remote-User</small></span></label>
       <div class="between" style="border-top:1px solid var(--line);padding-top:14px"><button class="btn primary" data-a="list-save" ${dirty ? '' : 'disabled'}>Review &amp; apply</button><span class="fill"></span><button class="btn danger" data-a="list-del">Delete list</button></div></section>
-      <div class="stack" style="flex:1 1 300px;min-width:0"><section class="card stack s8"><h2>Used by</h2>${usedBy(cur).map((h) => `<a href="#/host/${h.id}" class="note" style="text-decoration:none;color:var(--ink);font-weight:600">${esc(hostName(h))}</a>`).join('') || '<p class="hint">Not used yet. Pick it in a host’s Access tab.</p>'}</section>
+      <div class="stack" style="flex:1 1 300px;min-width:0"><section class="card stack s8"><h2>Used by</h2>${usedBy(cur).map((h) => `<a href="#/host/${h.id}/edit" class="note" style="text-decoration:none;color:var(--ink);font-weight:600">${esc(hostName(h))}</a>`).join('') || '<p class="hint">Not used yet. Pick it in a host’s Access tab.</p>'}</section>
       <section class="code" style="padding:0"><div style="padding:16px 18px 0;color:#D6D3D1;font-family:Inter,sans-serif;font-size:13px;font-weight:600">In the Caddyfile (reusable snippet)</div><pre id="lsnippet" style="margin:0;padding:12px 18px 18px;white-space:pre;overflow-x:auto;font:inherit">${esc(P.data.lsnip || '…')}</pre></section></div></main>` : ''}</div>`);
 }
 const renderListSnippet = debounce(async () => {
@@ -803,7 +859,7 @@ const ACT = {
   'modal-bg': (el, ev) => { if (ev.target === el) closeModal(); },
   ask: () => openAsk(),
   'ask-sug': (el) => { document.getElementById('askIn').value = el.textContent; runAsk(el.textContent); },
-  'open-proposal': () => { const p = PROPOSAL; closeModal(); P.key = ''; location.hash = p.id ? '#/host/' + p.id : '#/host/new'; if (location.hash === (p.id ? '#/host/' + p.id : '#/host/new')) render(); },
+  'open-proposal': () => { const p = PROPOSAL; closeModal(); P.key = ''; location.hash = p.id ? '#/host/' + p.id + '/edit' : '#/host/new'; if (location.hash === (p.id ? '#/host/' + p.id + '/edit' : '#/host/new')) render(); },
   explain: (el) => explain(el.dataset.err, el.dataset.h),
   'explain-review': () => { const r = REVIEW && REVIEW.res; const hid = REVIEW && REVIEW.payload && REVIEW.payload.hosts && P.data.ed ? P.data.ed.id : ''; explain((r && r.error) || 'Unknown error', hid); },
   apply: (el) => doApply(el),
@@ -857,7 +913,7 @@ const ACT = {
     const hosts = clone(S.state.hosts); const i = hosts.findIndex((x) => x.id === h.id);
     if (i >= 0) hosts[i] = h; else hosts.push(h);
     // keep other hosts' users unchanged (server keeps their hashes)
-    saveHosts(hosts, `${i >= 0 ? 'Update' : 'Add'} ${hostName(h)}`, () => { location.hash = '#/host/' + h.id; P.key = ''; render(); });
+    saveHosts(hosts, `${i >= 0 ? 'Update' : 'Add'} ${hostName(h)}`, () => { location.hash = '#/host/' + h.id + '/edit'; P.key = ''; render(); });
   },
   'delete-host': () => {
     const e = P.data.ed;
@@ -865,8 +921,31 @@ const ACT = {
     saveHosts(S.state.hosts.filter((x) => x.id !== e.id), `Delete ${hostName(e)}`, () => { location.hash = '#/hosts'; });
   },
   // logs
-  lrange: (el) => { P.data.range = el.dataset.k; delete P.data.stats; delete P.data.logs; rerender(); },
-  lstatus: (el) => { P.data.status = el.dataset.k; delete P.data.logs; rerender(); },
+  lrange: (el) => { P.data.range = el.dataset.k; refreshLogData(true); },
+  lstatus: (el) => { P.data.status = el.dataset.k; $app.querySelectorAll('[data-a=lstatus]').forEach((b) => b.classList.toggle('on', b === el)); refreshLogData(false); },
+  lrow: (el, ev) => {
+    if (ev.target.closest('a,button,input')) return;
+    const l = P.data.logs && P.data.logs.lines[+el.dataset.i]; if (!l) return;
+    P.data.open = P.data.open || {}; const k = lineKey(l);
+    if (P.data.expandAll) { P.data.expandAll = false; P.data.logs.lines.forEach((x) => { P.data.open[lineKey(x)] = true; }); }
+    P.data.open[k] = !P.data.open[k];
+    const h = P.data.pageHost ? S.state.hosts.find((x) => x.id === P.data.pageHost) : null;
+    document.getElementById('lp-tbody').innerHTML = lpRows(P.data.logs, h);
+    const b = $app.querySelector('[data-a=lexpand]'); if (b) b.textContent = 'Expand all';
+  },
+  lexpand: (el) => {
+    P.data.expandAll = !P.data.expandAll; if (!P.data.expandAll) P.data.open = {};
+    const h = P.data.pageHost ? S.state.hosts.find((x) => x.id === P.data.pageHost) : null;
+    document.getElementById('lp-tbody').innerHTML = lpRows(P.data.logs, h);
+    el.textContent = P.data.expandAll ? 'Collapse all' : 'Expand all'; el.setAttribute('aria-pressed', P.data.expandAll);
+  },
+  lask: (el) => {
+    const l = P.data.logs.lines[+el.dataset.i];
+    askLogs(P.data.aiKey, P.data.hostSel, P.data.range, 'Explain this request — what happened and is anything wrong?\n' + lineText(l));
+    setTimeout(() => { const a = document.getElementById('lp-ai'); if (a) a.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 50);
+  },
+  lcopy: async (el) => { const l = P.data.logs.lines[+el.dataset.i]; try { await navigator.clipboard.writeText(lineText(l)); toast('Copied'); } catch (e) { toast('Copy failed — your browser blocked clipboard access', true); } },
+  lip: (el) => { const l = P.data.logs.lines[+el.dataset.i]; P.data.q = l.ip; const qi = document.getElementById('lq'); if (qi) qi.value = l.ip; refreshLogData(false); },
   llive: (el) => { P.data.live = el.checked; rerender(); },
   'ai-sug': (el) => askLogs(el.dataset.k, el.dataset.h, el.dataset.r, el.textContent),
   // access lists
